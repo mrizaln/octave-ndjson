@@ -22,6 +22,10 @@ DEFUN_DLD(ndjson_load_file, args, , "ndjson_load_file(<filepath>)")
     auto file    = std::ifstream{ path };
     auto sstream = std::stringstream{};
 
+    if (not file.is_open()) {
+        error("Failed to open file '%s' (%s)", path.c_str(), strerror(errno));
+    }
+
     sstream << file.rdbuf();
 
     auto json = sstream.str();            // copy, I can't move the value out from the stream

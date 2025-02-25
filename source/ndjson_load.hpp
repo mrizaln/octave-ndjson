@@ -121,9 +121,14 @@ namespace octave_ndjson
             auto doc = *it;
 
             try {
-                auto parsed = parse_json_value(doc.get_value().value());
+                auto value = simdjson::ondemand::value{};
+                if (doc.get_value().get(value)) {
+                    throw std::runtime_error{ "The root of document must be either an Object or an Array" };
+                }
+
+                auto parsed = parse_json_value(value);
                 docs.push_back(std::move(parsed));
-            } catch (simdjson::simdjson_error& e) {
+            } catch (std::exception& e) {
                 auto offset  = doc.current_location().value() - string.data();
                 offset      -= offset > 0;
 
@@ -145,8 +150,6 @@ namespace octave_ndjson
                 );
 
                 error("%s", message.c_str());
-            } catch (std::exception& e) {
-                error("Unknown exception: %s", e.what());
             }
         }
 
