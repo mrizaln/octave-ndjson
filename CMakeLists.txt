@@ -20,5 +20,5 @@ function(make_oct name)
     set_target_properties(${name} PROPERTIES PREFIX "" SUFFIX ".oct")
 endfunction()
 
-make_oct(ndjson_load)
-
+make_oct(ndjson_load_string)
+make_oct(ndjson_load_file)
