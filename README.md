@@ -93,6 +93,26 @@ There are two functions that you can use to parse a JSON document.
   }
   ```
 
+Since A JSON file is just a JSONL file with single document, you can also use this library to parse them.
+
+> A JSON with the name `data.json`
+
+```json
+{ "a": 1, "b": 3.14 }
+```
+
+```
+octave> x = ndjson_load_string('{"a": 1, "b": 2 }');
+octave> x{1}
+ans =
+
+  scalar structure containing the fields:
+
+    a = 1
+    b = 2
+
+```
+
 ## Building
 
 This is a C++ code so you need to compile the code first before using it.
