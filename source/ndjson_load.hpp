@@ -4,7 +4,10 @@
 // - what the heck octave naming convention is so inconsistent!
 // - futhermore, why does most of the thing does not live in the octave namespace???????????????
 // - i'm having a hard time dealing with naming collisions :((((((((((
-// - the fuck with the class hierarchy also??
+// - what the heck with the class hierarchy also??
+
+#include "schema.hpp"
+#include "util.hpp"
 
 #include <octave/oct-map.h>
 #include <octave/oct.h>
@@ -39,12 +42,17 @@ namespace octave_ndjson
         return escaped;
     }
 
-    inline octave_value parse_json_value(simdjson::ondemand::value value) noexcept(false)
+    inline octave_value parse_json_value(
+        simdjson::ondemand::value value,
+        octave_ndjson::Schema&    schema
+    ) noexcept(false)
     {
         using Type = simdjson::ondemand::json_type;
 
         switch (value.type()) {
         case Type::array: {
+            schema.push(Schema::Array::Begin);
+
             // NOTE: at the moment I'm only handling 1D array
 
             // TODO: if the array contains other array with the same size then it can be made into actual
@@ -54,9 +62,11 @@ namespace octave_ndjson
             auto all_number = false;
 
             for (auto elem : value.get_array()) {
-                auto& parsed = array.emplace_back(parse_json_value(elem.value()));
+                auto& parsed = array.emplace_back(parse_json_value(elem.value(), schema));
                 all_number   = parsed.is_scalar_type() and parsed.isnumeric();
             }
+
+            schema.push(Schema::Array::End);
 
             if (all_number) {
                 auto ndarray = NDArray{ dim_vector{ 1, static_cast<long>(array.size()) } };
@@ -73,32 +83,39 @@ namespace octave_ndjson
             }
         }
         case Type::object: {
+            schema.push(Schema::Object::Begin);
+
             auto map = octave_scalar_map{};
 
             for (auto field : value.get_object()) {
-                auto key   = std::string{ field.unescaped_key().value() };
-                auto value = parse_json_value(field.value().value());
+                auto key = std::string{ field.unescaped_key().value() };
+                schema.push(Schema::Key{ key });
 
+                auto value = parse_json_value(field.value().value(), schema);
                 map.setfield(key, value);
             }
 
+            schema.push(Schema::Object::End);
+
             return map;
         }
-        case Type::string: {
-            // very inefficient; two copies were made here:
-            // - first, from simdjson (std::string_view) to std::string
-            // - then, from std::string to octave_value
-            // given the design of the octave API, I can't do anything about that one, copy is a must there
-            // but at the simdjson to std::string part, I can pass a previously created std::string into
-            // get_string() method so a buffer that is repeatedly used may be better, this function is
-            // recursive though, passing a string buffer repeatedly is kinda a hassle, maybe I will use
-            // std::stack instead in the future so I can use iterate approach instead.
+        case Type::string:
+            schema.push(Schema::Scalar::String);
             return std::string{ value.get_string().value() };
-        }
-        case Type::number: return value.get_double().value();
-        case Type::boolean: return value.get_bool().value();
-        case Type::null: return lo_ieee_na_value();
-        default: std::abort();
+
+        case Type::number:    //
+            schema.push(Schema::Scalar::Number);
+            return value.get_double().value();
+
+        case Type::boolean:    //
+            schema.push(Schema::Scalar::Bool);
+            return value.get_bool().value();
+
+        case Type::null:    //
+            schema.push(Schema::Scalar::Null);
+            return lo_ieee_na_value();
+
+        default: [[unlikely]] std::abort();
         }
     }
 
@@ -111,7 +128,8 @@ namespace octave_ndjson
             error("failed to initilize simdjson: %s", simdjson::error_message(err));
         }
 
-        auto docs = std::vector<octave_value>{};
+        auto docs          = std::vector<octave_value>{};
+        auto wanted_schema = std::optional<Schema>{};
 
         for (auto it = stream.begin(); it != stream.end(); ++it) {
             if (auto err = it.error(); err) {
@@ -126,8 +144,32 @@ namespace octave_ndjson
                     throw std::runtime_error{ "The root of document must be either an Object or an Array" };
                 }
 
-                auto parsed = parse_json_value(value);
+                auto current_schema = Schema{ wanted_schema ? 0 : wanted_schema->size() };
+                auto parsed         = parse_json_value(value, current_schema);
+
                 docs.push_back(std::move(parsed));
+
+                if (not wanted_schema.has_value()) {
+                    wanted_schema = current_schema;
+                }
+
+                if (wanted_schema != (current_schema)) {
+                    auto doc_number  = docs.size();
+                    auto wanted_str  = wanted_schema->stringify();
+                    auto current_str = current_schema.stringify();
+
+                    auto [wanted_diff, current_diff] = util::create_diff(wanted_str, current_str);
+
+                    auto message = std::format(
+                        "Mismatched schema, all documents must have the same schema"
+                        "\n\nFirst document:\n{0:}\nCurrent document (document number: {2:}):\n{1:}",
+                        wanted_diff,
+                        current_diff,
+                        doc_number
+                    );
+                    throw std::runtime_error{ message };
+                }
+
             } catch (std::exception& e) {
                 auto offset  = doc.current_location().value() - string.data();
                 offset      -= offset > 0;
@@ -136,12 +178,12 @@ namespace octave_ndjson
                 auto substr = escape_whitespace({ string.data() + offset, std::min(to_end, 50ul) });
 
                 auto message = std::format(
-                    "parsing error\n"
+                    "Parsing error\n"
                     "\t> {}\n\n"
-                    "\t> at offset {}: \033[32m{}{}{}\033[00m\n"
-                    "\t                     ^\n"
-                    "\t                     |\n"
-                    "\t        starts from here",
+                    "\t> at offset {}: \033[1;33m{}{}{}\033[00m\n"
+                    "\t                      ^\n"
+                    "\t                      |\n"
+                    "\t        parsing ends here",
                     e.what(),
                     offset,
                     offset > 0 ? " ... " : "<BOF>",

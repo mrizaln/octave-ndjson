@@ -2,6 +2,8 @@ set(FETCHCONTENT_QUIET FALSE)
 
 include(FetchContent)
 
+# simdjson
+# --------
 FetchContent_Declare(
   simdjson
   URL https://github.com/simdjson/simdjson/archive/refs/tags/v3.12.2.tar.gz
@@ -9,7 +11,20 @@ FetchContent_Declare(
   DOWNLOAD_EXTRACT_TIMESTAMP ON)
 FetchContent_MakeAvailable(simdjson)
 
+# fix unable to link
 target_compile_options(simdjson PRIVATE -fPIC)
 target_link_options(simdjson PRIVATE -fPIC)
 
 add_library(fetch::simdjson ALIAS simdjson)
+# --------
+
+# dtl-modern
+# ----------
+FetchContent_Declare(
+  dtl-modern
+  GIT_REPOSITORY https://github.com/mrizaln/dtl-modern
+  GIT_TAG v1.0.0)
+FetchContent_MakeAvailable(dtl-modern)
+
+add_library(fetch::dtl-modern ALIAS dtl-modern)
+# ----------
