@@ -59,11 +59,11 @@ namespace octave_ndjson
             // multidimensional array
 
             auto array      = std::vector<octave_value>{};
-            auto all_number = false;
+            auto all_number = true;
 
             for (auto elem : value.get_array()) {
-                auto& parsed = array.emplace_back(parse_json_value(elem.value(), schema));
-                all_number   = parsed.is_scalar_type() and parsed.isnumeric();
+                auto& parsed  = array.emplace_back(parse_json_value(elem.value(), schema));
+                all_number   &= parsed.isnumeric() and parsed.is_scalar_type();
             }
 
             schema.push(Schema::Array::End);
@@ -171,7 +171,11 @@ namespace octave_ndjson
                 }
 
             } catch (std::exception& e) {
-                auto offset  = doc.current_location().value() - string.data();
+                const char* current = nullptr;
+                if (doc.current_location().get(current)) {
+                    current = string.data() + string.size();
+                }
+                auto offset  = current - string.data();
                 offset      -= offset > 0;
 
                 auto to_end = string.size() - static_cast<std::size_t>(offset);
@@ -180,22 +184,22 @@ namespace octave_ndjson
                 auto message = std::format(
                     "Parsing error\n"
                     "\t> {}\n\n"
-                    "\t> at offset {}: \033[1;33m{}{}{}\033[00m\n"
-                    "\t                      ^\n"
-                    "\t                      |\n"
-                    "\t        parsing ends here",
+                    "\t> around: [\033[1;33m{}{}{}\033[00m] (at offset: {})\n"
+                    "\t                ^\n"
+                    "\t                |\n"
+                    "\t  parsing ends here",
                     e.what(),
-                    offset,
                     offset > 0 ? " ... " : "<BOF>",
                     substr,
-                    to_end > 50ul ? " ... " : "<EOF>"
+                    to_end > 50ul ? " ... " : "<EOF>",
+                    offset
                 );
 
                 error("%s", message.c_str());
             }
         }
 
-        auto cell = Cell{ dim_vector{ 1, static_cast<long>(docs.size()) } };
+        auto cell = Array<octave_value>{ dim_vector{ 1, static_cast<long>(docs.size()) } };
         for (auto i = 0ul; i < docs.size(); ++i) {
             cell(0, static_cast<long>(i)) = docs[i];
         }
