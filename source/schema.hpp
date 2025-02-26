@@ -12,6 +12,7 @@
 namespace octave_ndjson
 {
     namespace sv = std::views;
+    namespace sr = std::ranges;
 
     class Schema
     {
@@ -35,17 +36,47 @@ namespace octave_ndjson
         void        push(Part part) { m_parts.push_back(part); }
         std::size_t size() const { return m_parts.size(); }
 
-        bool operator==(const Schema& other) const
+        bool is_same(const Schema& other, bool dynamic_array) const
         {
-            if (m_parts.size() != other.m_parts.size()) {
-                return false;
-            }
-            for (auto i : sv::iota(0u, m_parts.size())) {
-                if (m_parts[i] != other.m_parts[i]) {
+            if (not dynamic_array) {
+                if (m_parts.size() != other.m_parts.size()) {
                     return false;
                 }
+
+                for (auto i : sv::iota(0u, m_parts.size())) {
+                    if (m_parts[i] != other.m_parts[i]) {
+                        return false;
+                    }
+                }
+
+                return true;
+            } else {
+                auto i = m_parts.begin();
+                auto j = other.m_parts.begin();
+
+                while (i != m_parts.end() and j != other.m_parts.end()) {
+                    if (*i != *j) {
+                        return false;
+                    }
+
+                    if (*i == Part{ Array::Begin }) {
+                        i = sr::find(i, m_parts.end(), Part{ Array::End });
+                    }
+
+                    if (*j == Part{ Array::Begin }) {
+                        j = sr::find(j, other.m_parts.end(), Part{ Array::End });
+                    }
+
+                    ++i;
+                    ++j;
+                }
+
+                if (i != m_parts.end() or j != other.m_parts.end()) {
+                    return false;
+                }
+
+                return true;
             }
-            return true;
         }
 
         std::string stringify() const

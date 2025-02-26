@@ -119,7 +119,7 @@ namespace octave_ndjson
         }
     }
 
-    inline octave_value load(const std::string& string)
+    inline octave_value load(const std::string& string, bool dynamic_array)
     {
         auto parser = simdjson::ondemand::parser{};
         auto stream = simdjson::ondemand::document_stream{};
@@ -153,7 +153,7 @@ namespace octave_ndjson
                     wanted_schema = current_schema;
                 }
 
-                if (wanted_schema != (current_schema)) {
+                if (not wanted_schema->is_same(current_schema, dynamic_array)) {
                     auto doc_number  = docs.size();
                     auto wanted_str  = wanted_schema->stringify();
                     auto current_str = current_schema.stringify();
