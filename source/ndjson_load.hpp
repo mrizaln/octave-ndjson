@@ -152,10 +152,16 @@ namespace octave_ndjson
         return octave_value{ cell };
     }
 
-    inline octave_value load_multi(std::string_view string, bool dynamic_array)
+    inline octave_value load_multi(std::string& string, bool dynamic_array)
     {
+        // NOTE: to make sure that the string has enough padding for simdjson use. see the explanation at
+        //       MultithreadedParser::parse function
+        auto string_unpadded_size = string.size();
+        simdjson::pad(string);
+        auto string_unpadded = std::string_view{ string.data(), string_unpadded_size };
+
         auto multithreaded_parser = MultithreadedParser{ std::thread::hardware_concurrency() };
-        auto line_splitter        = util::StringSplitter{ string, '\n' };
+        auto line_splitter        = util::StringSplitter{ string_unpadded, '\n' };
 
         auto docs          = std::vector<octave_value>{};
         auto wanted_schema = std::optional<Schema>{};

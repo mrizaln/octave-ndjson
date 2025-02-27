@@ -10,6 +10,7 @@
 
 namespace octave_ndjson
 {
+    // TODO: optimize this function
     inline octave_value parse_json_value(
         simdjson::ondemand::value value,
         octave_ndjson::Schema&    schema
@@ -22,9 +23,8 @@ namespace octave_ndjson
             schema.push(Schema::Array::Begin);
 
             // NOTE: at the moment I'm only handling 1D array
-
             // TODO: if the array contains other array with the same size then it can be made into actual
-            // multidimensional array
+            //       multidimensional array
 
             auto array      = std::vector<octave_value>{};
             auto all_number = true;

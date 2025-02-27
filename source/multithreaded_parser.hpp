@@ -81,7 +81,6 @@ namespace octave_ndjson
             , m_wake_flag(concurrency)
             , m_strings(concurrency)
             , m_futures(concurrency)
-            , m_parsers(concurrency)
         {
             m_threads.reserve(concurrency);
             for (auto i : sv::iota(0u, concurrency)) {
@@ -168,12 +167,11 @@ namespace octave_ndjson
     private:
         void thread_function(std::stop_token stop_token, std::size_t index)
         {
-            auto& parser = m_parsers[index];
-            auto& input  = m_strings[index];
+            auto& string = m_strings[index].m_string;
             auto& output = m_futures[index];
             auto& flag   = m_wake_flag[index];
 
-            auto buffer = std::string{};
+            auto parser = simdjson::ondemand::parser{};
 
             while (not stop_token.stop_requested()) {
                 flag.wait(false);
@@ -181,13 +179,14 @@ namespace octave_ndjson
                     break;
                 }
 
-                auto string = simdjson::padded_string{ input.m_string };
-                auto doc    = simdjson::ondemand::document{};
-
+                auto doc = simdjson::ondemand::document{};
                 try {
-                    if (auto err = parser.iterate(string).get(doc); err != simdjson::error_code::SUCCESS) {
-                        throw simdjson::simdjson_error{ err };
-                    }
+                    // NOTE: this assume that the input string is properly padded even if it is a string_view.
+                    //       if the string view is part of a larger string and the string_view points to the
+                    //       middle of that string then this should be safe provided that the large string
+                    //       have enough padding at the end of it. this means that the only padding required
+                    //       is in the end of the original string.
+                    doc = parser.iterate(string, string.size() + simdjson::SIMDJSON_PADDING);
 
                     auto schema = Schema{ 0 };
                     auto value  = parse_json_value(doc.get_value(), schema);
@@ -218,10 +217,9 @@ namespace octave_ndjson
         std::atomic<std::size_t> m_error_index = std::numeric_limits<std::size_t>::max();
         ParseResult::Error       m_error;
 
-        std::vector<std::atomic<bool>>          m_wake_flag;
-        std::vector<Input>                      m_strings;    // input
-        std::vector<std::optional<Parsed>>      m_futures;    // output
-        std::vector<simdjson::ondemand::parser> m_parsers;
-        std::vector<std::jthread>               m_threads;
+        std::vector<std::atomic<bool>>     m_wake_flag;
+        std::vector<Input>                 m_strings;    // input
+        std::vector<std::optional<Parsed>> m_futures;    // output
+        std::vector<std::jthread>          m_threads;
     };
 }
