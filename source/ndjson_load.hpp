@@ -209,10 +209,7 @@ namespace octave_ndjson
             }
 
             // line parsing ends but the parser might still parsing
-            auto remaining = multithreaded_parser.drain();
-            util::log("draining parser: {}", remaining.size());
-
-            for (auto&& parsed : remaining) {
+            for (auto&& parsed : multithreaded_parser.drain()) {
                 if (parsed.is_error()) {
                     auto error = std::get<ParseResult::Error>(parsed.m_result);
                     make_exception(error, parsed.m_info);

@@ -14,9 +14,8 @@
 
 namespace octave_ndjson
 {
-    class ParseResult
+    struct ParseResult
     {
-    public:
         struct Parsed
         {
             octave_value m_value;
