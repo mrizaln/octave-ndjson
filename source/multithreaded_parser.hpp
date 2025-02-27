@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <exception>
+#include <limits>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -107,23 +108,23 @@ namespace octave_ndjson
 
             m_wake_flag[index].wait(true);
 
+            if (m_error_index == index) {
+                prev_result.emplace(
+                    m_error.m_exception,
+                    m_strings[index].m_string,
+                    m_strings[index].m_line_number,
+                    m_error.m_offset
+                );
+                return prev_result;
+            }
+
             if (auto fut = std::exchange(m_futures[index], std::nullopt); fut.has_value()) {
-                if (m_error) {
-                    prev_result.emplace(
-                        m_error->m_exception,
-                        m_strings[index].m_string,
-                        m_strings[index].m_line_number,
-                        m_error->m_offset
-                    );
-                    return prev_result;
-                } else {
-                    prev_result.emplace(
-                        std::move(fut->m_value),
-                        std::move(fut->m_schema),
-                        m_strings[index].m_string,
-                        m_strings[index].m_line_number
-                    );
-                }
+                prev_result.emplace(
+                    std::move(fut->m_value),
+                    std::move(fut->m_schema),
+                    m_strings[index].m_string,
+                    m_strings[index].m_line_number
+                );
             }
 
             m_strings[index]   = Input{ string, line_number };
@@ -143,22 +144,22 @@ namespace octave_ndjson
                 auto index = (m_index + i) % m_concurrency;
                 m_wake_flag[index].wait(true);
 
+                if (m_error_index == index) {
+                    remaining.emplace_back(
+                        m_error.m_exception,
+                        m_strings[index].m_string,
+                        m_strings[index].m_line_number,
+                        m_error.m_offset
+                    );
+                }
+
                 if (auto fut = std::exchange(m_futures[index], std::nullopt); fut.has_value()) {
-                    if (m_error) {
-                        remaining.emplace_back(
-                            m_error->m_exception,
-                            m_strings[index].m_string,
-                            m_strings[index].m_line_number,
-                            m_error->m_offset
-                        );
-                    } else {
-                        remaining.emplace_back(
-                            std::move(fut->m_value),
-                            std::move(fut->m_schema),
-                            m_strings[index].m_string,
-                            m_strings[index].m_line_number
-                        );
-                    }
+                    remaining.emplace_back(
+                        std::move(fut->m_value),
+                        std::move(fut->m_schema),
+                        m_strings[index].m_string,
+                        m_strings[index].m_line_number
+                    );
                 }
             }
 
@@ -185,7 +186,7 @@ namespace octave_ndjson
                 auto doc    = simdjson::ondemand::document{};
 
                 try {
-                    if (auto err = parser.iterate(string).get(doc); err) {
+                    if (auto err = parser.iterate(string).get(doc); err != simdjson::error_code::SUCCESS) {
                         throw simdjson::simdjson_error{ err };
                     }
 
@@ -193,15 +194,17 @@ namespace octave_ndjson
                     auto value  = parse_json_value(doc.get_value(), schema);
 
                     output = Parsed{ std::move(value), std::move(schema) };
-                } catch (std::exception& e) {
-                    if (not m_error) {
-                        auto location = doc.current_location();
+                } catch (...) {
+                    auto idx = std::numeric_limits<std::size_t>::max();
+                    if (m_error_index.compare_exchange_strong(idx, index)) {
                         auto offset   = 0l;
+                        auto location = doc.current_location();
+
                         if (not location.error()) {
                             offset = location.value() - string.data();
                         }
 
-                        m_error.emplace(std::current_exception(), offset);
+                        m_error = ParseResult::Error{ std::current_exception(), static_cast<size_t>(offset) };
                     }
                 }
 
@@ -213,7 +216,8 @@ namespace octave_ndjson
         std::size_t m_concurrency;
         std::size_t m_index = 0;
 
-        std::optional<ParseResult::Error> m_error = std::nullopt;
+        std::atomic<std::size_t> m_error_index = std::numeric_limits<std::size_t>::max();
+        ParseResult::Error       m_error;
 
         std::vector<std::atomic<bool>>          m_wake_flag;
         std::vector<Input>                      m_strings;    // input

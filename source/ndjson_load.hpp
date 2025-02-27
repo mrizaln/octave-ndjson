@@ -160,7 +160,7 @@ namespace octave_ndjson
         auto docs          = std::vector<octave_value>{};
         auto wanted_schema = std::optional<Schema>{};
 
-        auto same_schema = [&](const Schema& other, ParseResult::Info info) {
+        auto assert_same_schema = [&](const Schema& other, ParseResult::Info info) {
             if (not wanted_schema->is_same(other, dynamic_array)) {
                 auto wanted_str  = wanted_schema->stringify();
                 auto current_str = other.stringify();
@@ -204,12 +204,15 @@ namespace octave_ndjson
                     wanted_schema = schema;
                 }
 
-                same_schema(schema, parsed->m_info);
+                assert_same_schema(schema, parsed->m_info);
                 docs.push_back(std::move(oct_value));
             }
 
             // line parsing ends but the parser might still parsing
-            for (auto&& parsed : multithreaded_parser.drain()) {
+            auto remaining = multithreaded_parser.drain();
+            util::log("draining parser: {}", remaining.size());
+
+            for (auto&& parsed : remaining) {
                 if (parsed.is_error()) {
                     auto error = std::get<ParseResult::Error>(parsed.m_result);
                     make_exception(error, parsed.m_info);
@@ -217,11 +220,12 @@ namespace octave_ndjson
 
                 auto& result               = std::get<ParseResult::Parsed>(parsed.m_result);
                 auto&& [oct_value, schema] = std::move(result);
+
                 if (not wanted_schema.has_value()) {
                     wanted_schema = schema;
                 }
 
-                same_schema(schema, parsed.m_info);
+                assert_same_schema(schema, parsed.m_info);
                 docs.push_back(std::move(oct_value));
             }
         } catch (ParseException& e) {
