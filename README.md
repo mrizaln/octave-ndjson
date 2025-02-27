@@ -6,6 +6,12 @@ Multithreaded Newline Delimited JSON (ndjson) or JSON Lines (jsonl) parser for O
 
 This library is inspired largely by [octave-rapidjson](https://github.com/Andy1978/octave-rapidjson) design instead of the built-in `jsondecode` function in Octave.
 
+## TODO
+
+- [ ] Optimize `parse_json_value` function. At the moment there are many unnecessary copies done in the function.
+- [ ] Change the file reading approach to on-demand approach instead of preloading all of the contents of the file on memory at once.
+  > Creating line buffering mechanism is the best approach I guess.
+
 ## Motivation
 
 I have a simulation that emits data every few seconds. The data is encoded in [Newline Delimited JSON](https://github.com/ndjson/ndjson-spec)/[JSON Lines](https://jsonlines.org/). After looking for a while on the internet I found that there is no parser for such JSON format for Octave. So here it is.
