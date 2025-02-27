@@ -6,8 +6,7 @@
 // - i'm having a hard time dealing with naming collisions :((((((((((
 // - what the heck with the class hierarchy also??
 
-#include "schema.hpp"
-#include "util.hpp"
+#include "multithreaded_parser.hpp"
 
 #include <octave/oct-map.h>
 #include <octave/oct.h>
@@ -17,14 +16,37 @@
 #include <string>
 #include <vector>
 
-#if defined(NDEBUG)
-#    define LOG(...)
-#else
-#    define LOG(...) std::cout << std::format(__VA_ARGS__) << '\n';
-#endif
-
 namespace octave_ndjson
 {
+    struct ParseException : std::runtime_error
+    {
+        ParseException(
+            const char*      message,
+            std::string_view string,
+            std::size_t      line_number,
+            std::size_t      offset
+        )
+            : std::runtime_error{ message }
+            , m_string{ string }
+            , m_line_number{ line_number }
+            , m_offset{ offset }
+        {
+        }
+
+        std::string_view m_string;
+        std::size_t      m_line_number;
+        std::size_t      m_offset;
+    };
+
+    [[noreturn]] inline void make_exception(ParseResult::Error result, ParseResult::Info info)
+    {
+        try {
+            std::rethrow_exception(result.m_exception);
+        } catch (std::exception& e) {
+            throw ParseException{ e.what(), info.m_string, info.m_line_number, result.m_offset };
+        }
+    }
+
     inline std::string escape_whitespace(std::string_view string)
     {
         auto escaped = std::string{};
@@ -40,83 +62,6 @@ namespace octave_ndjson
             }
         }
         return escaped;
-    }
-
-    inline octave_value parse_json_value(
-        simdjson::ondemand::value value,
-        octave_ndjson::Schema&    schema
-    ) noexcept(false)
-    {
-        using Type = simdjson::ondemand::json_type;
-
-        switch (value.type()) {
-        case Type::array: {
-            schema.push(Schema::Array::Begin);
-
-            // NOTE: at the moment I'm only handling 1D array
-
-            // TODO: if the array contains other array with the same size then it can be made into actual
-            // multidimensional array
-
-            auto array      = std::vector<octave_value>{};
-            auto all_number = true;
-
-            for (auto elem : value.get_array()) {
-                auto& parsed  = array.emplace_back(parse_json_value(elem.value(), schema));
-                all_number   &= parsed.isnumeric() and parsed.is_scalar_type();
-            }
-
-            schema.push(Schema::Array::End);
-
-            if (all_number) {
-                auto ndarray = NDArray{ dim_vector{ 1, static_cast<long>(array.size()) } };
-                for (auto i = 0ul; i < array.size(); ++i) {
-                    ndarray(0, static_cast<long>(i)) = array[i].double_value();
-                }
-                return ndarray;
-            } else {
-                auto cell = Cell{ dim_vector{ 1, static_cast<long>(array.size()) } };
-                for (auto i = 0ul; i < array.size(); ++i) {
-                    cell(0, static_cast<long>(i)) = array[i];
-                }
-                return cell;
-            }
-        }
-        case Type::object: {
-            schema.push(Schema::Object::Begin);
-
-            auto map = octave_scalar_map{};
-
-            for (auto field : value.get_object()) {
-                auto key = std::string{ field.unescaped_key().value() };
-                schema.push(Schema::Key{ key });
-
-                auto value = parse_json_value(field.value().value(), schema);
-                map.setfield(key, value);
-            }
-
-            schema.push(Schema::Object::End);
-
-            return map;
-        }
-        case Type::string:
-            schema.push(Schema::Scalar::String);
-            return std::string{ value.get_string().value() };
-
-        case Type::number:    //
-            schema.push(Schema::Scalar::Number);
-            return value.get_double().value();
-
-        case Type::boolean:    //
-            schema.push(Schema::Scalar::Bool);
-            return value.get_bool().value();
-
-        case Type::null:    //
-            schema.push(Schema::Scalar::Null);
-            return lo_ieee_na_value();
-
-        default: [[unlikely]] std::abort();
-        }
     }
 
     inline octave_value load(const std::string& string, bool dynamic_array)
@@ -184,19 +129,121 @@ namespace octave_ndjson
                 auto message = std::format(
                     "Parsing error\n"
                     "\t> {}\n\n"
-                    "\t> around: [\033[1;33m{}{}{}\033[00m] (at offset: {})\n"
+                    "\t> around: [{}\033[1;33m{}\033[00m{}] (at offset: {})\n"
                     "\t                ^\n"
                     "\t                |\n"
                     "\t  parsing ends here",
                     e.what(),
-                    offset > 0 ? " ... " : "<BOF>",
+                    offset > 0 ? " ... " : "<bof>",
                     substr,
-                    to_end > 50ul ? " ... " : "<EOF>",
+                    to_end > 50ul ? " ... " : "<eof>",
                     offset
                 );
 
                 error("%s", message.c_str());
             }
+        }
+
+        auto cell = Array<octave_value>{ dim_vector{ 1, static_cast<long>(docs.size()) } };
+        for (auto i = 0ul; i < docs.size(); ++i) {
+            cell(0, static_cast<long>(i)) = docs[i];
+        }
+
+        return octave_value{ cell };
+    }
+
+    inline octave_value load_multi(std::string_view string, bool dynamic_array)
+    {
+        auto multithreaded_parser = MultithreadedParser{ std::thread::hardware_concurrency() };
+        auto line_splitter        = util::StringSplitter{ string, '\n' };
+
+        auto docs          = std::vector<octave_value>{};
+        auto wanted_schema = std::optional<Schema>{};
+
+        auto same_schema = [&](const Schema& other, ParseResult::Info info) {
+            if (not wanted_schema->is_same(other, dynamic_array)) {
+                auto wanted_str  = wanted_schema->stringify();
+                auto current_str = other.stringify();
+
+                auto [wanted_diff, current_diff] = util::create_diff(wanted_str, current_str);
+
+                auto message = std::format(
+                    "Mismatched schema, all documents must have same schema (dynamic_array flag not enabled)"
+                    "\n\nFirst document:\n{0:}\nCurrent document (line: {2:}):\n{1:}",
+                    wanted_diff,
+                    current_diff,
+                    info.m_line_number
+                );
+
+                throw ParseException{ message.c_str(), info.m_string, info.m_line_number, 0 };
+            }
+        };
+
+        try {
+            auto line_number = 0ul;
+            while (auto line = line_splitter.next()) {
+                ++line_number;
+
+                auto parsed = multithreaded_parser.parse(*line, line_number);
+
+                // at the start of the parsing the parser does not have any previous result, but if the
+                // concurrency limit is reached then the parser will return the previous result
+                if (not parsed) {
+                    continue;
+                }
+
+                if (parsed->is_error()) {
+                    auto error = std::get<ParseResult::Error>(parsed->m_result);
+                    make_exception(error, parsed->m_info);
+                }
+
+                auto& result               = std::get<ParseResult::Parsed>(parsed->m_result);
+                auto&& [oct_value, schema] = std::move(result);
+
+                if (not wanted_schema.has_value()) {
+                    wanted_schema = schema;
+                }
+
+                same_schema(schema, parsed->m_info);
+                docs.push_back(std::move(oct_value));
+            }
+
+            // line parsing ends but the parser might still parsing
+            for (auto&& parsed : multithreaded_parser.drain()) {
+                if (parsed.is_error()) {
+                    auto error = std::get<ParseResult::Error>(parsed.m_result);
+                    make_exception(error, parsed.m_info);
+                }
+
+                auto& result               = std::get<ParseResult::Parsed>(parsed.m_result);
+                auto&& [oct_value, schema] = std::move(result);
+                if (not wanted_schema.has_value()) {
+                    wanted_schema = schema;
+                }
+
+                same_schema(schema, parsed.m_info);
+                docs.push_back(std::move(oct_value));
+            }
+        } catch (ParseException& e) {
+            auto to_end = e.m_string.size() - e.m_offset;
+            auto substr = escape_whitespace({ e.m_string.data() + e.m_offset, std::min(to_end, 50ul) });
+
+            auto message = std::format(
+                "Parsing error\n"
+                "\t> {}\n\n"
+                "\t> around: [{}\033[1;33m{}\033[00m{}] (line: {} | offset: {})\n"
+                "\t                ^\n"
+                "\t                |\n"
+                "\t  parsing ends here",
+                e.what(),
+                e.m_offset > 0 ? " ... " : "<bol>",
+                substr,
+                to_end > 50ul ? " ... " : "<eol>",
+                e.m_line_number,
+                e.m_offset
+            );
+
+            error("%s", message.c_str());
         }
 
         auto cell = Array<octave_value>{ dim_vector{ 1, static_cast<long>(docs.size()) } };

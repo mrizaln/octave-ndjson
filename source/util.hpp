@@ -3,6 +3,7 @@
 #include <dtl_modern/dtl_modern.hpp>
 
 #include <format>
+#include <iostream>
 
 namespace util
 {
@@ -11,6 +12,52 @@ namespace util
     {
         using Fs::operator()...;
     };
+
+    class StringSplitter
+    {
+    public:
+        StringSplitter(std::string_view str, char delim) noexcept
+            : m_str{ str }
+            , m_delim{ delim }
+        {
+        }
+
+        std::optional<std::string_view> next() noexcept
+        {
+            if (m_idx >= m_str.size()) {
+                return std::nullopt;
+            }
+
+            while (m_idx <= m_str.size() and m_str[m_idx] == m_delim) {
+                ++m_idx;
+            }
+
+            auto it = std::ranges::find(m_str | std::views::drop(m_idx), m_delim);
+
+            if (it == m_str.end()) {
+                auto res = m_str.substr(m_idx);
+                m_idx    = m_str.size();    // mark end of line
+                return res;
+            }
+
+            auto pos = static_cast<std::size_t>(it - m_str.begin());
+            auto res = m_str.substr(m_idx, pos - m_idx);
+            m_idx    = pos + 1;
+
+            return res;
+        }
+
+    private:
+        std::string_view m_str;
+        std::size_t      m_idx   = 0;
+        char             m_delim = '\n';
+    };
+
+    template <typename... Args>
+    inline void log(std::format_string<Args...> fmt, Args&&... args)
+    {
+        std::cout << std::format(fmt, std::forward<Args>(args)...) << '\n';
+    }
 
     inline std::vector<std::string_view> split(std::string_view str, char delim) noexcept
     {
