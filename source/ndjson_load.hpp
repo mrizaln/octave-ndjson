@@ -194,23 +194,23 @@ namespace octave_ndjson
 
                 // at the start of the parsing the parser does not have any previous result, but if the
                 // concurrency limit is reached then the parser will return the previous result
-                if (not parsed) {
+                if (parsed.is_empty()) {
                     continue;
                 }
 
-                if (parsed->is_error()) {
-                    auto error = std::get<ParseResult::Error>(parsed->m_result);
-                    make_exception(error, parsed->m_info);
+                if (parsed.is_error()) {
+                    auto error = std::get<ParseResult::Error>(parsed.m_result);
+                    make_exception(error, parsed.m_info);
                 }
 
-                auto& result               = std::get<ParseResult::Parsed>(parsed->m_result);
+                auto& result               = std::get<ParseResult::Parsed>(parsed.m_result);
                 auto&& [oct_value, schema] = std::move(result);
 
                 if (not wanted_schema.has_value()) {
                     wanted_schema = schema;
                 }
 
-                assert_same_schema(schema, parsed->m_info);
+                assert_same_schema(schema, parsed.m_info);
                 docs.push_back(std::move(oct_value));
             }
 

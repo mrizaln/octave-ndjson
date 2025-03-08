@@ -4,7 +4,6 @@
 
 #include <octave/error.h>
 
-#include <limits>
 #include <ranges>
 #include <variant>
 #include <vector>
@@ -28,8 +27,6 @@ namespace octave_ndjson
         // clang-format on
 
         using Part = std::variant<Scalar, Object, Array, Key>;
-
-        static constexpr auto valid = std::numeric_limits<std::size_t>::max();
 
         Schema(std::size_t reserve) { m_parts.reserve(reserve); }
 

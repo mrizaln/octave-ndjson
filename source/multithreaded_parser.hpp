@@ -7,13 +7,17 @@
 
 #include <atomic>
 #include <exception>
-#include <limits>
-#include <optional>
 #include <thread>
 #include <vector>
 
 namespace octave_ndjson
 {
+    /**
+     * @class ParseResult
+     * @brief Result of the parsing.
+     *
+     * Use std::get or std::get_if on the ParseResult::m_result to get the actual result.
+     */
     struct ParseResult
     {
         struct Parsed
@@ -34,14 +38,39 @@ namespace octave_ndjson
             std::size_t      m_line_number;
         };
 
-        using Result = std::variant<Parsed, Error>;
+        using Result = std::variant<std::monostate, Parsed, Error>;
 
+        /**
+         * @brief Construct an empty ParseResult.
+         */
+        ParseResult()
+            : m_result{ std::monostate{} }
+            , m_info{ "", 0 }
+        {
+        }
+
+        /**
+         * @brief Construct a ParseResult with a parsed value.
+         *
+         * @param value The parsed value.
+         * @param schema The schema of the parsed json.
+         * @param string The originial json string.
+         * @param line_number The line number of the json string.
+         */
         ParseResult(octave_value value, Schema schema, std::string_view string, std::size_t line_number)
             : m_result{ Parsed{ std::move(value), std::move(schema) } }
             , m_info{ string, line_number }
         {
         }
 
+        /**
+         * @brief Construct a ParseResult with an error.
+         *
+         * @param exception The exception that caused the error.
+         * @param string The originial json string.
+         * @param line_number The line number of the json string.
+         * @param offset The offset of the error in the json string.
+         */
         ParseResult(
             std::exception_ptr exception,
             std::string_view   string,
@@ -53,6 +82,7 @@ namespace octave_ndjson
         {
         }
 
+        bool is_empty() const { return std::holds_alternative<std::monostate>(m_result); }
         bool is_error() const { return std::holds_alternative<Error>(m_result); }
         bool is_parsed() const { return std::holds_alternative<Parsed>(m_result); }
 
@@ -60,6 +90,10 @@ namespace octave_ndjson
         Info   m_info;
     };
 
+    /**
+     * @class MultithreadedParser
+     * @brief Multithreaded JSON parser with round-robin scheduling.
+     */
     class MultithreadedParser
     {
     public:
@@ -79,7 +113,7 @@ namespace octave_ndjson
             : m_concurrency{ concurrency }
             , m_index{ 0 }
             , m_wake_flag(concurrency)
-            , m_strings(concurrency)
+            , m_inputs(concurrency)
             , m_futures(concurrency)
         {
             m_threads.reserve(concurrency);
@@ -99,33 +133,26 @@ namespace octave_ndjson
             }
         }
 
-        std::optional<ParseResult> parse(std::string_view string, std::size_t line_number)
+        /**
+         * @brief Parse a json string asynchronously.
+         *
+         * @param string The input string.
+         * @param line_number The line number of the input string.
+         * @return The result of the parsing.
+         *
+         * The async scheduling used is a simple round-robin scheduling, thus the returned result might be
+         * empty (check with ParseResult::is_empty function) at the start of the parsing. The result is
+         * guaranteed to be non-empty after the first non-empty result is returned.
+         */
+        ParseResult parse(std::string_view string, std::size_t line_number)
         {
-            auto prev_result = std::optional<ParseResult>{};
-            auto index       = m_index;
-
+            auto index = m_index;
             m_wake_flag[index].wait(true);
 
-            if (m_error_index == index) {
-                prev_result.emplace(
-                    m_error.m_exception,
-                    m_strings[index].m_string,
-                    m_strings[index].m_line_number,
-                    m_error.m_offset
-                );
-                return prev_result;
-            }
+            // result must be retrieved before notifying the thread
+            auto prev_result = std::exchange(m_futures[index], {});
 
-            if (auto fut = std::exchange(m_futures[index], std::nullopt); fut.has_value()) {
-                prev_result.emplace(
-                    std::move(fut->m_value),
-                    std::move(fut->m_schema),
-                    m_strings[index].m_string,
-                    m_strings[index].m_line_number
-                );
-            }
-
-            m_strings[index]   = Input{ string, line_number };
+            m_inputs[index]    = Input{ string, line_number };
             m_wake_flag[index] = true;
             m_wake_flag[index].notify_one();
 
@@ -134,6 +161,15 @@ namespace octave_ndjson
             return prev_result;
         }
 
+        /**
+         * @brief Drain the remaining results from the parser.
+         *
+         * @return The remaining results (guaranteed to be non-empty).
+         *
+         * Since the parser uses a round-robin scheduling, the parser might still have some results that has
+         * not been retrieved after you done calling ParseResult::parse repeatedly. This function will
+         * retrieve all the remaining results from the parser.
+         */
         std::vector<ParseResult> drain()
         {
             auto remaining = std::vector<ParseResult>{};
@@ -142,22 +178,8 @@ namespace octave_ndjson
                 auto index = (m_index + i) % m_concurrency;
                 m_wake_flag[index].wait(true);
 
-                if (m_error_index == index) {
-                    remaining.emplace_back(
-                        m_error.m_exception,
-                        m_strings[index].m_string,
-                        m_strings[index].m_line_number,
-                        m_error.m_offset
-                    );
-                }
-
-                if (auto fut = std::exchange(m_futures[index], std::nullopt); fut.has_value()) {
-                    remaining.emplace_back(
-                        std::move(fut->m_value),
-                        std::move(fut->m_schema),
-                        m_strings[index].m_string,
-                        m_strings[index].m_line_number
-                    );
+                if (auto result = std::exchange(m_futures[index], {}); not result.is_empty()) {
+                    remaining.push_back(std::move(result));
                 }
             }
 
@@ -167,7 +189,8 @@ namespace octave_ndjson
     private:
         void thread_function(std::stop_token stop_token, std::size_t index)
         {
-            auto& string = m_strings[index].m_string;
+            auto& [string, line_number] = m_inputs[index];
+
             auto& output = m_futures[index];
             auto& flag   = m_wake_flag[index];
 
@@ -191,19 +214,13 @@ namespace octave_ndjson
                     auto schema = Schema{ 0 };
                     auto value  = parse_json_value(doc.get_value(), schema);
 
-                    output = Parsed{ std::move(value), std::move(schema) };
+                    output = ParseResult{ std::move(value), std::move(schema), string, line_number };
                 } catch (...) {
-                    auto idx = std::numeric_limits<std::size_t>::max();
-                    if (m_error_index.compare_exchange_strong(idx, index)) {
-                        auto offset   = 0l;
-                        auto location = doc.current_location();
-
-                        if (not location.error()) {
-                            offset = location.value() - string.data();
-                        }
-
-                        m_error = ParseResult::Error{ std::current_exception(), static_cast<size_t>(offset) };
+                    auto offset = 0ull;
+                    if (auto location = doc.current_location(); not location.error()) {
+                        offset = static_cast<std::size_t>(location.value() - string.data());
                     }
+                    output = ParseResult{ std::current_exception(), string, line_number, offset };
                 }
 
                 flag = false;
@@ -214,12 +231,9 @@ namespace octave_ndjson
         std::size_t m_concurrency;
         std::size_t m_index = 0;
 
-        std::atomic<std::size_t> m_error_index = std::numeric_limits<std::size_t>::max();
-        ParseResult::Error       m_error;
-
-        std::vector<std::atomic<bool>>     m_wake_flag;
-        std::vector<Input>                 m_strings;    // input
-        std::vector<std::optional<Parsed>> m_futures;    // output
-        std::vector<std::jthread>          m_threads;
+        std::vector<std::atomic<bool>> m_wake_flag;
+        std::vector<Input>             m_inputs;     // input
+        std::vector<ParseResult>       m_futures;    // output
+        std::vector<std::jthread>      m_threads;
     };
 }
