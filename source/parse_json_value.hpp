@@ -10,7 +10,18 @@
 
 namespace octave_ndjson
 {
-    // TODO: optimize this function
+    /**
+     * @brief Parse a JSON value into an Octave value.
+     *
+     * @param value The JSON value to be parsed.
+     * @param schema Schema object to be filled with the schema of the JSON value.
+     *
+     * @return The parsed Octave value.
+     *
+     * @throw simdjson::simdjson_error if there is an error parsing the JSON value.
+     *
+     * TODO: optimize this function
+     */
     inline octave_value parse_json_value(
         simdjson::ondemand::value value,
         octave_ndjson::Schema&    schema

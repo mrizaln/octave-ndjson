@@ -13,12 +13,14 @@ namespace octave_ndjson
     namespace sv = std::views;
     namespace sr = std::ranges;
 
+    /**
+     * @class Schema
+     *
+     * @brief A simple representation of JSON schema.
+     */
     class Schema
     {
     public:
-        template <std::ranges::range R>
-        friend Schema parse_schema(R&& schema);
-
         // clang-format off
         enum class Scalar { Number, String, Bool, Null };
         enum class Object { Begin, End };
@@ -28,12 +30,27 @@ namespace octave_ndjson
 
         using Part = std::variant<Scalar, Object, Array, Key>;
 
-        Schema(std::size_t reserve) { m_parts.reserve(reserve); }
+        Schema(std::size_t reserve) noexcept { m_parts.reserve(reserve); }
 
-        void        push(Part part) { m_parts.push_back(part); }
-        std::size_t size() const { return m_parts.size(); }
+        void        push(Part part) noexcept { m_parts.push_back(part); }
+        std::size_t size() const noexcept { return m_parts.size(); }
 
-        bool is_same(const Schema& other, bool dynamic_array) const
+        /**
+         * @brief Check whether the schema is the same as the other schema.
+         *
+         * @param other The other schema to be compared with.
+         * @param dynamic_array Dynamic array mode flag.
+         *
+         * @return True if the schema is the same, false otherwise.
+         *
+         * If `dynamic_array` is true, then the schema is considered the same if the structure is the same
+         * regardless of the array elements. This means that the depth of the array also won't be checked and
+         * if any of the elements happen to be an array or object, it won't be checked further.
+         *
+         * The strictest comparison is done when `dynamic_array` is false--all elements must be the same and
+         * in the same order.
+         */
+        bool is_same(const Schema& other, bool dynamic_array) const noexcept
         {
             if (not dynamic_array) {
                 if (m_parts.size() != other.m_parts.size()) {
@@ -76,7 +93,14 @@ namespace octave_ndjson
             }
         }
 
-        std::string stringify() const
+        /**
+         * @brief Stringify the schema.
+         *
+         * @return The stringified schema.
+         *
+         * Useful for debugging.
+         */
+        std::string stringify() const noexcept
         {
             enum class Kind
             {

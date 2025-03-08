@@ -7,12 +7,24 @@
 
 namespace util
 {
+    /**
+     * @brief Helper struct for creating overloaded lambdas.
+     *
+     * @tparam Fs The lambdas to be included in the overload.
+     *
+     * Useful for `std::visit`.
+     */
     template <typename... Fs>
     struct Overload : Fs...
     {
         using Fs::operator()...;
     };
 
+    /**
+     * @class StringSplitter
+     *
+     * @brief On-demand string splitter.
+     */
     class StringSplitter
     {
     public:
@@ -22,6 +34,11 @@ namespace util
         {
         }
 
+        /**
+         * @brief Get the next split string.
+         *
+         * @return The next split string, or `std::nullopt` if there is no more string to split.
+         */
         std::optional<std::string_view> next() noexcept
         {
             if (m_idx >= m_str.size()) {
@@ -53,39 +70,51 @@ namespace util
         char             m_delim = '\n';
     };
 
+    /**
+     * @brief Log to stdout.
+     *
+     * For debugging purposes.
+     */
     template <typename... Args>
-    inline void log(std::format_string<Args...> fmt, Args&&... args)
+    inline void log(std::format_string<Args...> fmt, Args&&... args) noexcept
     {
         std::cout << std::format(fmt, std::forward<Args>(args)...) << '\n';
     }
 
+    /**
+     * @brief Split a string by a delimiter.
+     *
+     * @param str The string to be split.
+     * @param delim The delimiter.
+     *
+     * @return A vector of split strings.
+     *
+     * The split is done at once. Use `StringSplitter` for on-demand split.
+     */
     inline std::vector<std::string_view> split(std::string_view str, char delim) noexcept
     {
         auto res = std::vector<std::string_view>{};
 
-        auto j = 0ul;
-        while (j < str.size()) {
-            while (j != str.size() and str[j] == delim) {
-                ++j;
-            }
-
-            auto it = std::ranges::find(str | std::views::drop(j), delim);
-
-            if (it == str.end()) {
-                res.push_back(str.substr(j));
-                break;
-            }
-
-            auto pos = static_cast<std::size_t>(it - str.begin());
-            res.push_back(str.substr(j, pos - j));
-
-            j = pos + 1;
+        auto splitter = StringSplitter{ str, delim };
+        while (auto line = splitter.next()) {
+            res.push_back(line.value());
         }
 
         return res;
     }
 
-    inline std::pair<std::string, std::string> create_diff(std::string_view lhs, std::string_view rhs)
+    /**
+     * @brief Create a formatted diff string between two strings.
+     *
+     * @param lhs Left-hand side string.
+     * @param rhs Right-hand side string.
+     *
+     * @return A pair of formatted diff strings (each string for each side).
+     */
+    inline std::pair<std::string, std::string> create_diff(
+        std::string_view lhs,
+        std::string_view rhs
+    ) noexcept
     {
         auto lhs_lines = split(lhs, '\n');
         auto rhs_lines = split(rhs, '\n');

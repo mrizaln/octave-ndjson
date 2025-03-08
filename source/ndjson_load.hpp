@@ -38,6 +38,12 @@ namespace octave_ndjson
         std::size_t      m_offset;
     };
 
+    /**
+     * @brief Helper function to create an exception from `ParseResult::Error`.
+     *
+     * @param result Error result.
+     * @param info Additional error information.
+     */
     [[noreturn]] inline void make_exception(ParseResult::Error result, ParseResult::Info info)
     {
         try {
@@ -47,7 +53,14 @@ namespace octave_ndjson
         }
     }
 
-    inline std::string escape_whitespace(std::string_view string)
+    /**
+     * @brief Create a string with escaped whitespace.
+     *
+     * @param string The string to be escaped.
+     *
+     * @return An escaped string.
+     */
+    inline std::string escape_whitespace(std::string_view string) noexcept
     {
         auto escaped = std::string{};
         for (auto ch : string) {
@@ -64,6 +77,20 @@ namespace octave_ndjson
         return escaped;
     }
 
+    /**
+     * @brief Load and parse a JSON string into an Octave value (single-threaded).
+     *
+     * @param string The input string.
+     * @param dynamic_array Dynamic array flag.
+     *
+     * @return The Octave value.
+     *
+     * @throw <internal_octave_error> if there is an error parsing the JSON string.
+     *
+     * I believe the `error` function provided by octave throws an exception, but I have no idea what
+     * exception it throws. The `dynamic_array` flag is used for `Schema` comparision using the
+     * `Schema::is_same` function.
+     */
     inline octave_value load(const std::string& string, bool dynamic_array)
     {
         auto parser = simdjson::ondemand::parser{};
@@ -114,7 +141,6 @@ namespace octave_ndjson
                     );
                     throw std::runtime_error{ message };
                 }
-
             } catch (std::exception& e) {
                 const char* current = nullptr;
                 if (doc.current_location().get(current)) {
@@ -152,10 +178,24 @@ namespace octave_ndjson
         return octave_value{ cell };
     }
 
+    /**
+     * @brief Load and parse a JSON string into an Octave value (multi-threaded).
+     *
+     * @param string The input string.
+     * @param dynamic_array Dynamic array flag.
+     *
+     * @return The Octave value.
+     *
+     * @throw <internal_octave_error> if there is an error parsing the JSON string.
+     *
+     * I believe the `error` function provided by octave throws an exception, but I have no idea what
+     * exception it throws. The `dynamic_array` flag is used for `Schema` comparision using the
+     * `Schema::is_same` function.
+     */
     inline octave_value load_multi(std::string& string, bool dynamic_array)
     {
         // NOTE: to make sure that the string has enough padding for simdjson use. see the explanation at
-        //       MultithreadedParser::parse function
+        //       MultithreadedParser::thread_function
         auto string_unpadded_size = string.size();
         simdjson::pad(string);
         auto string_unpadded = std::string_view{ string.data(), string_unpadded_size };
@@ -174,11 +214,12 @@ namespace octave_ndjson
                 auto [wanted_diff, current_diff] = util::create_diff(wanted_str, current_str);
 
                 auto message = std::format(
-                    "Mismatched schema, all documents must have same schema (dynamic_array flag not enabled)"
+                    "Mismatched schema, all documents must have same schema (dynamic_array: {3:})"
                     "\n\nFirst document:\n{0:}\nCurrent document (line: {2:}):\n{1:}",
                     wanted_diff,
                     current_diff,
-                    info.m_line_number
+                    info.m_line_number,
+                    dynamic_array
                 );
 
                 throw ParseException{ message.c_str(), info.m_string, info.m_line_number, 0 };
