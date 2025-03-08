@@ -8,6 +8,7 @@ This library is inspired largely by [octave-rapidjson](https://github.com/Andy19
 
 ## TODO
 
+- [ ] Eliminate the constraint of each JSON document needed to be separated by newline.
 - [ ] Optimize `parse_json_value` function. At the moment there are many unnecessary copies done in the function.
 - [ ] Change the file reading approach to on-demand approach instead of preloading all of the contents of the file on memory at once.
   > Creating line buffering mechanism is the best approach I guess.
@@ -155,6 +156,23 @@ cmake --build build
 ```
 
 The resulting `.oct` files will be in the `./build` directory relative to the project root. You can move them to your Octave working directory and use it!
+
+### Generate code documentation
+
+> - The documentation is only needed if you want to understand how the code works. Do use the it if you want to contribute back to the repo :D
+> - The code is short enough
+
+To generate the documentation, you need to have `doxygen` installed on your system.
+
+```sh
+doxygen docs/Doxygen
+```
+
+The documentation will be generated inside `docs/doxygen/html` directory. Use your favorite browser (or html viewer) to view it.
+
+```sh
+firefox docs/doxygen/html/index.html
+```
 
 ## Note
 
