@@ -20,7 +20,7 @@ namespace octave_ndjson
      *
      * @throw simdjson::simdjson_error if there is an error parsing the JSON value.
      *
-     * TODO: optimize this function
+     * @todo optimize this function
      */
     inline octave_value parse_json_value(
         simdjson::ondemand::value value,

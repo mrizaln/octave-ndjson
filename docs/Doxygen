@@ -1,0 +1,28 @@
+DOXYFILE_ENCODING      = UTF-8
+PROJECT_NAME           = "octave-ndjson"
+PROJECT_BRIEF          = "Multithreaded Newline Delimited JSON (ndjson) or JSON Lines (jsonl) parser for Octave"
+OUTPUT_DIRECTORY       = docs/doxygen
+ALLOW_UNICODE_NAMES    = YES
+OUTPUT_LANGUAGE        = English
+TAB_SIZE               = 4
+MARKDOWN_SUPPORT       = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+INPUT                  = source README.md
+INPUT_ENCODING         = UTF-8
+FILE_PATTERNS          = *.hpp, *.cpp
+RECURSIVE              = YES
+ENABLE_PREPROCESSING   = NO
+SORT_MEMBER_DOCS       = NO
+
+OPTIMIZE_OUTPUT_FOR_C  = YES
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+
+GENERATE_TREEVIEW      = YES        # optional. Also works without treeview
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+HTML_EXTRA_STYLESHEET  = docs/style/doxygen-awesome.css
+HTML_COLORSTYLE        = DARK       # required with Doxygen >= 1.9.5
+
+USE_MDFILE_AS_MAINPAGE = README.md

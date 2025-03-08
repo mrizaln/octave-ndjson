@@ -180,8 +180,8 @@ namespace octave_ndjson
          * @return The remaining results (guaranteed to be non-empty).
          *
          * Since the parser uses a round-robin scheduling, the parser might still have some results that has
-         * not been retrieved after you done calling `ParseResult::parse` repeatedly. This function will
-         * retrieve all the remaining results from the parser.
+         * not been retrieved after you done calling `MultithreadedParser::parse` repeatedly. This function
+         * will retrieve all the remaining results from the parser.
          */
         std::vector<ParseResult> drain() noexcept
         {
