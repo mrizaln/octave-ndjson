@@ -1,103 +1,103 @@
+#include "args.hpp"
 #include "ndjson_load.hpp"
 
 static constexpr auto usage_string = R"(
-ndjson_load_string(jsonl_string: string, dynamic_array: bool, single_threaded: bool)
+ndjson_load_string(
+    json_string: string,         % positional
+    [mode      : enum_string],   % optional property
+    [threading : enum_string]    % optional property
+)
 )";
 
 static constexpr auto help_string = R"(
 ============================== ndjson_load_string help page ==============================
 signature:
-    ndjson_load_string(jsonl_string: string, dynamic_array: bool, single_threaded: bool)
+    ndjson_load_string(
+        json_string: string,         % positional
+        [mode      : enum_string],   % optional property
+        [threading : enum_string]    % optional property
+    )
 
 parameters:
-    > jsonl_string      : An NDJSON/JSON Lines string.
-    > dynamic_array     : This bool flag signals the parser to parse (and validate) arrays
-                          as dynamicallly sized array. This flag also turn off the type
-                          check on the arrays elements.
-    > single_threaded   : Run in single-thread mode instead. Multithread mode will be much
-                          faster, but it uses a lot of memory as well, you may want to set
-                          this flag to true if you are constrained in memory.
+    > json_string : An NDJSON/JSON Lines string.
+
+    > mode : Enumeration that specifies the strictness of the schema comparison.
+        - strict   : Documents must have the same schema.
+        - dynarray : Documents have the same schema but the number of elements in array
+                     and its types can vary.
+        - relaxed  : Documents can have different schemas.
+
+    > threading : Threading mode.
+        - single : Run in single-thread mode.
+        - multi  : Run in multi-thread mode.
 
 behavior:
-    By default the [ndjson_load_string] function will parse NDJSON/JSON Lines ([jsonl]
-    from hereon) in strict mode i.e. all the documents on the [jsonl] must have the same
-    JSON structure from the number of elements of an array, the type of each element, type
-    type of object value, to the order of the occurence of the key in the document.
+    By default the [ndjson_load_string] function will parse NDJSON/JSON Lines ([jsonl] from
+    hereon) in strict mode i.e. all the documents on the [jsonl] must have the same JSON
+    structure (the number of elements of an array, the type of each element, type type
+    of object value, and the order of the occurence of the key in the document).
 
     The [ndjson_load_string] function will run in multithreaded mode by default. The only
     caveat is that you must have each JSON document at each line (don't prettify). So, the
-    input must be like this
+    input must be like this:
 
-        > ok                                    > only the first array processed
-    ```                                     ```
-    [1, 2, 3, 4]                            [1, 2, 3, 4] [5, 6, 7, 8] [9, 10, 11, 12]
-    [5, 6, 7, 8]                            ```
-    [9, 10, 11, 12]
+    ```
+        { "a": 1, "b": [4, 5] }
+        { "a": 2, "b": [6, 7] }
+    ```
+
+    This one will result in an error:
+
+    ```
+        {                           // <- parsing ends here: incomplete object
+            "a": 1,
+            "b": [4, 5]
+        }
+        {
+            "a": 2,
+            "b": [6, 7]
+        }
     ```
 
     The single-thread mode don't have this constraint.
 
 example:
-    For example, a [jsonl] string with content:
-        "[1, 2, 3, 4]\n[5, 6, 7]"
+    For example, a variable [data] which is a string with content:
+    ```
+        { "a": 1, "b": [4, 5] }
+        { "a": 2, "b": [6, 7, 8] }
+    ```
 
-    if parsed will return an error with message:
+    if parsed will default parameters will return an error with message:
 
     ```
-        octave> ndjson_load_string("[1, 2, 3, 4]\n[5, 6, 7]", false, false)
+        octave> ndjson_load_string(data)
 
         error: Parsing error
-            > Mismatched schema, all documents must have same schema (dynamic_array flag not enabled)
+            > Mismatched schema, all documents must have same schema (dynamic_array: false)
 
-        First document:
-        [
-            <number> x 4,
-        ],
-
-        Current document (line: 2):
-        [
-            <number> x 3,
-        ],
-
-
-            > around: [<bol>[5, 6, 7]<eol>] (line: 2 | offset: 0)
-                            ^
-                            |
-              parsing ends here
+        % rest of the message...
     ```
 
-    The [dynamic_array] flag is used to relax that restriction.
+    You can relax the schema comparison by setting the `mode` parameter to 'dynarray'
+    (or 'relaxed' if you want to ignore the schema comparison entirely):
+
+    ```
+        octave> a = ndjson_load_string(data, 'mode', 'dynarray');
+        octave> % success!
+    ```
 ==========================================================================================
 )";
 
-std::string build_error_with_help(std::string_view error)
-{
-    return std::format("{}\n{}", help_string, error);
-}
+namespace ndjson = octave_ndjson;
 
 DEFUN_DLD(ndjson_load_string, args, , usage_string)
 {
-    if (args.length() != 3) {
-        error("%s", build_error_with_help("Incorrect number of arguments, 3 are required.").c_str());
-    }
+    auto [json, mode, threading] = ndjson::args::parse(args, ndjson::args::Kind::String, help_string);
 
-    if (not args(0).is_string()) {
-        error("%s", build_error_with_help("First argument must be a string").c_str());
-    }
-    if (not args(1).is_bool_scalar()) {
-        error("%s", build_error_with_help("Second argument must be a bool").c_str());
-    }
-    if (not args(2).is_bool_scalar()) {
-        error("%s", build_error_with_help("Third argument must be a bool").c_str());
-    }
-
-    auto json             = args(0).string_value();
-    auto as_dynamic_array = args(1).bool_value();
-    auto single_threaded  = args(2).bool_value();
-
-    if (single_threaded) {
-        return octave_ndjson::load(json, as_dynamic_array);
-    } else {
-        return octave_ndjson::load_multi(json, as_dynamic_array);
+    switch (threading) {
+    case ndjson::args::Threading::Single: return ndjson::load(json, mode);
+    case ndjson::args::Threading::Multi: return ndjson::load_multi(json, mode);
+    default: std::abort();
     }
 }

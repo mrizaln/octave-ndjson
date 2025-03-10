@@ -18,6 +18,18 @@
 
 namespace octave_ndjson
 {
+    enum class ParseMode
+    {
+        // Documents must have the same schema, including the number of elements and their types on array
+        Strict,
+
+        // Documents must have the same schema, but the number of elements and their types on array can vary
+        DynamicArray,
+
+        // Documents can have different schemas
+        Relaxed,
+    };
+
     struct ParseException : std::runtime_error
     {
         ParseException(
@@ -81,17 +93,16 @@ namespace octave_ndjson
      * @brief Load and parse a JSON string into an Octave value (single-threaded).
      *
      * @param string The input string.
-     * @param dynamic_array Dynamic array flag.
+     * @param mode Parse mode.
      *
      * @return The Octave value.
      *
      * @throw <internal_octave_error> if there is an error parsing the JSON string.
      *
      * I believe the `error` function provided by octave throws an exception, but I have no idea what
-     * exception it throws. The `dynamic_array` flag is used for `Schema` comparision using the
-     * `Schema::is_same` function.
+     * exception it throws. The `mode` enum specifies the strictness of the schema comparison.
      */
-    inline octave_value load(const std::string& string, bool dynamic_array)
+    inline octave_value load(const std::string& string, ParseMode mode)
     {
         auto parser = simdjson::ondemand::parser{};
         auto stream = simdjson::ondemand::document_stream{};
@@ -102,6 +113,15 @@ namespace octave_ndjson
 
         auto docs          = std::vector<octave_value>{};
         auto wanted_schema = std::optional<Schema>{};
+
+        const auto same_schema = [&mode](const Schema& reference, const Schema& schema) {
+            switch (mode) {
+            case ParseMode::Strict: return reference.is_same(schema, false);
+            case ParseMode::DynamicArray: return reference.is_same(schema, true);
+            case ParseMode::Relaxed: return true;
+            default: std::abort();
+            }
+        };
 
         for (auto it = stream.begin(); it != stream.end(); ++it) {
             if (auto err = it.error(); err) {
@@ -125,7 +145,7 @@ namespace octave_ndjson
                     wanted_schema = current_schema;
                 }
 
-                if (not wanted_schema->is_same(current_schema, dynamic_array)) {
+                if (not same_schema(*wanted_schema, current_schema)) {
                     auto doc_number  = docs.size();
                     auto wanted_str  = wanted_schema->stringify();
                     auto current_str = current_schema.stringify();
@@ -182,17 +202,16 @@ namespace octave_ndjson
      * @brief Load and parse a JSON string into an Octave value (multi-threaded).
      *
      * @param string The input string.
-     * @param dynamic_array Dynamic array flag.
+     * @param mode Parse mode.
      *
      * @return The Octave value.
      *
      * @throw <internal_octave_error> if there is an error parsing the JSON string.
      *
      * I believe the `error` function provided by octave throws an exception, but I have no idea what
-     * exception it throws. The `dynamic_array` flag is used for `Schema` comparision using the
-     * `Schema::is_same` function.
+     * exception it throws. The `mode` enum specifies the strictness of the schema comparison.
      */
-    inline octave_value load_multi(std::string& string, bool dynamic_array)
+    inline octave_value load_multi(std::string& string, ParseMode mode)
     {
         // NOTE: to make sure that the string has enough padding for simdjson use. see the explanation at
         //       MultithreadedParser::thread_function
@@ -207,7 +226,16 @@ namespace octave_ndjson
         auto wanted_schema = std::optional<Schema>{};
 
         auto assert_same_schema = [&](const Schema& other, ParseResult::Info info) {
-            if (not wanted_schema->is_same(other, dynamic_array)) {
+            const auto same_schema = [&mode](const Schema& reference, const Schema& schema) {
+                switch (mode) {
+                case ParseMode::Strict: return reference.is_same(schema, false);
+                case ParseMode::DynamicArray: return reference.is_same(schema, true);
+                case ParseMode::Relaxed: return true;
+                default: std::abort();
+                }
+            };
+
+            if (not same_schema(*wanted_schema, other)) {
                 auto wanted_str  = wanted_schema->stringify();
                 auto current_str = other.stringify();
 
@@ -219,7 +247,7 @@ namespace octave_ndjson
                     wanted_diff,
                     current_diff,
                     info.m_line_number,
-                    dynamic_array
+                    mode == ParseMode::DynamicArray
                 );
 
                 throw ParseException{ message.c_str(), info.m_string, info.m_line_number, 0 };
