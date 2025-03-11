@@ -174,12 +174,38 @@ namespace octave_ndjson
             }
         }
 
+        if (docs.size() == 1) {
+            if (reference_schema->root_is_object()) {
+                return docs[0].scalar_map_value();
+            } else if (docs[0].isnumeric()) {
+                return docs[0].array_value();
+            } else {
+                return docs[0].cell_value();
+            }
+        }
+
+        if (mode != ParseMode::Relaxed and reference_schema->root_is_object()) {
+            auto struct_array      = octave_map{};
+            auto struct_array_dims = dim_vector{ static_cast<long>(docs.size()), 1 };
+            auto field_names       = docs[0].scalar_map_value().fieldnames();
+
+            if (field_names.numel() != 0) {
+                auto value = Cell{ struct_array_dims };
+                for (auto i : sv::iota(0l, field_names.numel())) {
+                    for (auto k : sv::iota(0u, docs.size())) {
+                        value(k) = docs[k].scalar_map_value().getfield(field_names(i));
+                    }
+                    struct_array.assign(field_names(i), value);
+                }
+                return struct_array;
+            }
+        }
+
         auto cell = Array<octave_value>{ dim_vector{ 1, static_cast<long>(docs.size()) } };
         for (auto i = 0ul; i < docs.size(); ++i) {
             cell(0, static_cast<long>(i)) = docs[i];
         }
-
-        return octave_value{ cell };
+        return cell;
     }
 
     /**
@@ -311,6 +337,16 @@ namespace octave_ndjson
             error("%s", message.c_str());
         }
 
+        if (cell.numel() == 1) {
+            if (reference_schema.root_is_object()) {
+                return cell(0).scalar_map_value();
+            } else if (cell(0).isnumeric()) {
+                return cell(0).array_value();
+            } else {
+                return cell(0).cell_value();
+            }
+        }
+
         if (mode != ParseMode::Relaxed and reference_schema.root_is_object()) {
             auto struct_array      = octave_map{};
             auto struct_array_dims = dim_vector{ cell.numel(), 1 };
@@ -324,7 +360,6 @@ namespace octave_ndjson
                     }
                     struct_array.assign(field_names(i), value);
                 }
-
                 return struct_array;
             }
         }
