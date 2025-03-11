@@ -1,16 +1,22 @@
 # octave-ndjson
 
-Multithreaded Newline Delimited JSON (ndjson) or JSON Lines (jsonl) parser for Octave.
+Multithreaded Newline Delimited JSON (`.ndjson`) or JSON Lines (`.jsonl`) parser for Octave, powered by [`simdjson`](https://github.com/simdjson/simdjson).
 
-[simdjson](https://github.com/simdjson/simdjson) is used as the underlying JSON parsing library.
-
-This library is inspired largely by [octave-rapidjson](https://github.com/Andy1978/octave-rapidjson) design instead of the built-in `jsondecode` function in Octave.
+This library is inspired by [`octave-rapidjson`](https://github.com/Andy1978/octave-rapidjson) but the design follows [`jsondecode`](https://docs.octave.org/latest/JSON-data-encoding_002fdecoding.html#index-jsondecode) function.
 
 ## Motivation
 
-I have a simulation that emits data every few seconds. The data is encoded in [Newline Delimited JSON](https://github.com/ndjson/ndjson-spec)/[JSON Lines](https://jsonlines.org/). After looking for a while on the internet I found that there is no parser for such JSON format for Octave. So here it is.
+I have a simulation that emits data every few seconds. The data is encoded in [Newline Delimited JSON](https://github.com/ndjson/ndjson-spec)/[JSON Lines](https://jsonlines.org/).
 
-You can image JSONL as a JSON with the Root object an Array:
+Before I created this, I need to always convert my JSONL into a JSON using `jq`. For a while it was okay, but the more the JSONL contains data, the longer the conversion and the higher the memory consumption is. Until after my JSONL file contains about `100k` JSON document entries in it and about `200MiB` in size, `jq` consume so much memory that the OOM killer triggered and killed it.
+
+After looking for a while on the internet I found that there is no parser for such JSON format for Octave, so I decided to create my own.
+
+## Usage
+
+> For more comprehensive usage information, read the [Help](#help) section.
+
+You can imagine JSONL as a JSON with an array as its root :
 
 > JSON
 
@@ -30,37 +36,44 @@ You can image JSONL as a JSON with the Root object an Array:
 
 This format is used primarily in streaming data (like my simulation).
 
-While yes there is `jq` tool that can convert the data from `json` to `jsonl` (and vice versa) it adds the overhead of converting them which takes quite a while if the data is big (hundreds of megabytes). Using this format also is just easier to handle since we don't need to add and remove the square brackets every time data is transferred to be appended to already received data.
+While yes there is `jq` tool that can convert the data from `json` to `jsonl` (and vice versa) it adds the overhead of converting them which takes quite a while if the data is big (and may use too much resource, as illustrated above). Using this format is also just easier to handle since we don't need to add and remove the square brackets every time data is transferred to be appended to already received data.
 
-## Usage
+### Parsing JSONL
 
-There are two functions that you can use to parse a JSON document.
+There are two functions that you can use to parse a JSONL document.
 
 - `ndjson_load_string`, which takes a JSON string as parameter;
 
   ```
-  octave> x = ndjson_load_string("{ \"a\": 1, \"b\": 3.14 }\n{ \"a\": 2, \"b\": 2.71 }")
-
+  octave:2> x = ndjson_load_string("{ \"a\": 1, \"b\": 3.14 }\n{ \"a\": 2, \"b\": 2.71 }")
   x =
-  {
-    [1,1] =
 
-      scalar structure containing the fields:
+    2x1 struct array containing the fields:
 
-        a = 1
-        b = 3.14
+      a
+      b
 
-    [1,2] =
+  octave:3> x(1)
+  ans =
 
-      scalar structure containing the fields:
+    scalar structure containing the fields:
 
-        a = 2
-        b = 2.71
+      a = 1
+      b = 3.1400
 
-  }
+  octave:4> x(2)
+  ans =
+
+    scalar structure containing the fields:
+
+      a = 2
+      b = 2.7100
+
+  octave:5>
+
   ```
 
-- and `ndjson_load_file`, which takes a string as filepath as its parameter.
+- and `ndjson_load_file`, which takes a filepath (string) as its parameter.
 
   Given a `data.jsonl` file in the Octave working directory with following content
 
@@ -72,26 +85,33 @@ There are two functions that you can use to parse a JSON document.
   you can load it with the function like so:
 
   ```
-  octave> x = ndjson_load_file('data.jsonl')
-
+  octave:5> x = ndjson_load_file('data.jsonl')
   x =
-  {
-    [1,1] =
 
-      scalar structure containing the fields:
+    2x1 struct array containing the fields:
 
-        a = 1
-        b = 3.14
+      a
+      b
 
-    [1,2] =
+  octave:6> x(1)
+  ans =
 
-      scalar structure containing the fields:
+    scalar structure containing the fields:
 
-        a = 2
-        b = 2.71
+      a = 1
+      b = 3.1400
 
-  }
+  octave:7> x(2)
+  ans =
+
+    scalar structure containing the fields:
+
+      a = 2
+      b = 2.7100
+
   ```
+
+### Parsing JSON
 
 Since A JSON file is just a JSONL file with single document, you can also use this library to parse them.
 
@@ -102,14 +122,13 @@ Since A JSON file is just a JSONL file with single document, you can also use th
 ```
 
 ```
-octave> x = ndjson_load_string('{"a": 1, "b": 2 }');
-octave> x{1}
+octave:3> ndjson_load_file('data.jsonl')
 ans =
 
   scalar structure containing the fields:
 
     a = 1
-    b = 2
+    b = 3.1400
 
 ```
 
@@ -139,6 +158,8 @@ The simdjson library is fetched directly using CMake so no need to prepare for t
 
 For other distros, you might want to search for the information in your distro's repository and adjust accordingly.
 
+> For Windows... idk
+
 ### Compiling
 
 The compile step is quite simple, you just need to run these command one after another:
@@ -153,7 +174,7 @@ The resulting `.oct` files will be in the `./build` directory relative to the pr
 ### Generate code documentation
 
 > - The documentation is only needed if you want to understand how the code works. Do use the it if you want to contribute back to the repo :D
-> - The code is short enough
+> - The codebase is short enough, so you should be able to understand everything by looking at the comment in source code directly, so this step might be not necessary for you
 
 To generate the documentation, you need to have `doxygen` installed on your system.
 
@@ -170,8 +191,37 @@ firefox docs/doxygen/html/index.html
 ## Note
 
 - The multithreaded parser is sensitive to newlines. Please reserve newline for separating documents only (like a good NDJSON/JSONL file).
-- If you have a prettified JSON, you probably want to unprettify them first if you want to use the multithreading capability, but if you don't want to, you can always fallback to the single-thread mode by settig the third parameter of the function to `true`.
-- Since multithreading have uncertainty to it, if you have multiple errors happening in the documents (different line), the reported line might be not always be the same (this library only report one of the first thread to encounter an error, the other thread that may be also getting an error are ignored).
+- If you have a prettified JSON, you probably want to unprettify them first if you want to use the multithreading capability, but if you don't want to, you can always fallback to the single-thread mode by setting parameter `'threading'` to `'single'`.
+
+  > A JSON with the name `data.json`
+
+  ```json
+  {
+    "a": 1,
+    "b": 3.14
+  }
+  ```
+
+  ```
+  octave:12> a = ndjson_load_file('data.jsonl', 'threading', 'single')
+  a =
+
+    scalar structure containing the fields:
+
+      a = 1
+      b = 3.1400
+  ```
+
+## Benchmark
+
+The benchmark is done on an Intel(R) Core(TM) i5-10500H (6 core/12 thread) with the frequency locked to 2.5GHz. The file used to benchmark the functions is a JSON/JSONL file with `99517` document entries (array elements if JSON). Each document is `1969.17 ± 269.162` bytes long, amounts to a file `187 MiB` big.
+
+| function             | note                   |        time |
+| :------------------- | :--------------------- | ----------: |
+| `ndjson_load_string` | single thread, relaxed |  `4.41782s` |
+| `ndjson_load_string` | multi thread, relaxed  |  `1.60672s` |
+| `load_json`          | octave-rapidjson       | `13.93470s` |
+| `jsondecode`         | native octave function |  `6.20773s` |
 
 ## Help
 
@@ -345,7 +395,7 @@ example:
 
 - [ ] ~~Eliminate the constraint of each JSON document needed to be separated by newline.~~
   > I essentially need to create a simpler JSON parser for this, not worth it (I've tried).
-- [ ] Optimize `parse_json_value` function.
-  > At the moment there are many unnecessary copies done in the function.
+- [x] Optimize ~~`parse_json_value`~~ `parse_octave_value` function.
+  > Using dom parser is better apparently. Also, I kinda copied `jsondecode` source code, so that's that.
 - [ ] Add on-demand file read approach.
   > Line-by-line buffering mechanism is the best approach I guess.
