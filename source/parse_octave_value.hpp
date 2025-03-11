@@ -1,3 +1,5 @@
+#pragma once
+
 #include <octave/Cell.h>
 #include <octave/error.h>
 #include <octave/oct-map.h>
@@ -5,8 +7,6 @@
 #include <simdjson.h>
 
 #include <ranges>
-
-#pragma once
 
 namespace octave_ndjson
 {

@@ -1,3 +1,5 @@
+#pragma once
+
 #include "ndjson_load.hpp"
 
 #include <octave/error.h>
