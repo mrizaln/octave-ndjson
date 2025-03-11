@@ -1,9 +1,11 @@
 #include "args.hpp"
 #include "ndjson_load.hpp"
 
+#include <octave/defun-dld.h>
+#include <octave/error.h>
+#include <simdjson.h>
+
 #include <filesystem>
-#include <fstream>
-#include <sstream>
 
 static constexpr auto usage_string = R"(
 ndjson_load_file(
@@ -105,21 +107,14 @@ DEFUN_DLD(ndjson_load_file, args, , usage_string)
         error("File '%s' is not a regular file", path.c_str());
     }
 
-    auto file    = std::ifstream{ path };
-    auto sstream = std::stringstream{};
-
-    if (not file.is_open()) {
-        error("Failed to open file '%s' (%s)", path.c_str(), strerror(errno));
+    auto padded_string = simdjson::padded_string::load(path);
+    if (padded_string.error()) {
+        error("Failed to load file '%s': %s", path.c_str(), simdjson::error_message(padded_string.error()));
     }
 
-    sstream << file.rdbuf();
-
-    auto json = sstream.str();            // copy, I can't move the value out from the stream
-    std::stringstream{}.swap(sstream);    // to deallocate the copy
-
     switch (threading) {
-    case ndjson::args::Threading::Single: return ndjson::load(json, mode);
-    case ndjson::args::Threading::Multi: return ndjson::load_multi(json, mode);
+    case ndjson::args::Threading::Single: return ndjson::load(padded_string.value(), mode);
+    case ndjson::args::Threading::Multi: return ndjson::load_multi(padded_string.value(), mode);
     default: [[unlikely]] std::abort();
     }
 }

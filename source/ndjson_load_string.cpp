@@ -1,6 +1,9 @@
 #include "args.hpp"
 #include "ndjson_load.hpp"
 
+#include <octave/defun-dld.h>
+#include <simdjson.h>
+
 static constexpr auto usage_string = R"(
 ndjson_load_string(
     json_string: string,         % positional
@@ -93,11 +96,12 @@ namespace ndjson = octave_ndjson;
 
 DEFUN_DLD(ndjson_load_string, args, , usage_string)
 {
-    auto [json, mode, threading] = ndjson::args::parse(args, ndjson::args::Kind::String, help_string);
+    auto [string, mode, threading] = ndjson::args::parse(args, ndjson::args::Kind::String, help_string);
+    auto padded_string             = simdjson::pad(string);
 
     switch (threading) {
-    case ndjson::args::Threading::Single: return ndjson::load(json, mode);
-    case ndjson::args::Threading::Multi: return ndjson::load_multi(json, mode);
+    case ndjson::args::Threading::Single: return ndjson::load(padded_string, mode);
+    case ndjson::args::Threading::Multi: return ndjson::load_multi(padded_string, mode);
     default: [[unlikely]] std::abort();
     }
 }
