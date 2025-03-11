@@ -8,7 +8,7 @@ This library is inspired by [`octave-rapidjson`](https://github.com/Andy1978/oct
 
 I have a simulation that emits data every few seconds. The data is encoded in [Newline Delimited JSON](https://github.com/ndjson/ndjson-spec)/[JSON Lines](https://jsonlines.org/).
 
-Before I created this, I need to always convert my JSONL into a JSON using `jq`. For a while it was okay, but the more the JSONL contains data, the longer the conversion and the higher the memory consumption is. Until after my JSONL file contains about `100k` JSON document entries in it and about `200MiB` in size, `jq` consume so much memory that the OOM killer triggered and killed it.
+Before I created this, I need to always convert my JSONL into a JSON using `jq`. For a while it was okay, but the more the JSONL contains data, the longer the conversion and the higher the memory consumption is. Until after my JSONL file contains about `100k` JSON document entries in it and about `200MiB` in size, `jq` consume so much memory that the OOM killer got triggered and killed it.
 
 After looking for a while on the internet I found that there is no parser for such JSON format for Octave, so I decided to create my own.
 
@@ -214,14 +214,19 @@ firefox docs/doxygen/html/index.html
 
 ## Benchmark
 
-The benchmark is done on an Intel(R) Core(TM) i5-10500H (6 core/12 thread) with the frequency locked to 2.5GHz. The file used to benchmark the functions is a JSON/JSONL file with `99517` document entries (array elements if JSON). Each document is `1969.17 ± 269.162` bytes long, amounts to a file `187 MiB` big.
+The benchmark is done on an Intel(R) Core(TM) i5-10500H (6 core/12 thread) with the frequency locked to 2.5GHz. The file used to benchmark the functions is a JSON/JSONL file with `199034` document entries (array elements if JSON). Each document is `1969.17 ± 269.162` bytes long, amounts to a file `374 MiB` big.
 
-| function             | note                   |        time |
-| :------------------- | :--------------------- | ----------: |
-| `ndjson_load_string` | single thread, relaxed |  `4.41782s` |
-| `ndjson_load_string` | multi thread, relaxed  |  `1.60672s` |
-| `load_json`          | octave-rapidjson       | `13.93470s` |
-| `jsondecode`         | native octave function |  `6.20773s` |
+| function             | note                   |        time | speedup |
+| :------------------- | :--------------------- | ----------: | ------: |
+| `jsondecode`         | native octave function | `16.35900s` | `1.00x` |
+| `ndjson_load_string` | single thread, relaxed |  `9.17047s` | `1.78x` |
+| `ndjson_load_string` | multi thread, relaxed  |  `3.22453s` | `5.07x` |
+| `ndjson_load_file`   | single thread, relaxed |  `8.01613s` | `2.04x` |
+| `ndjson_load_file`   | multi thread, relaxed  |  `2.54787s` | `6.42x` |
+| `load_json`          | octave-rapidjson       | `27.85150s` | `0.59x` |
+
+> - I'm actually quite disappointed with the result. The speedup from single thread to multi thread is only `3.15x`. This is not a very good value, considering the number of cores and threads my test computer has. But, the increase is not marginal either, so it's still a win.
+> - `simdjson`'s dom parser on `ndjson` is multithreaded by default (2 threads: main thread and worker thread--It is detailed [here](https://github.com/simdjson/simdjson/blob/f3b034ac38060303c856c83f51f4156a4d1da8c1/doc/parse_many.md#threads)). So even when `ndjson_load_string` or `ndjson_load_file` ran in single thread mode, it may spawn two threads (it can be disabled when compiling, refer to `simdjson` documentation).
 
 ## Help
 
@@ -288,7 +293,7 @@ example:
         { "a": 2, "b": [6, 7, 8] }
     ```
 
-    if parsed will default parameters will return an error with message:
+    if parsed with default parameters will return an error with message:
 
     ```
         octave> ndjson_load_string(data)
@@ -370,7 +375,7 @@ example:
         { "a": 2, "b": [6, 7, 8] }
     ```
 
-    if parsed will default parameters will return an error with message:
+    if parsed with default parameters will return an error with message:
 
     ```
         octave> ndjson_load_file('data.jsonl')
@@ -399,3 +404,4 @@ example:
   > Using dom parser is better apparently. Also, I kinda copied `jsondecode` source code, so that's that.
 - [ ] Add on-demand file read approach.
   > Line-by-line buffering mechanism is the best approach I guess.
+- [ ] Add the ability to set number of threads at runtime.
