@@ -98,6 +98,6 @@ DEFUN_DLD(ndjson_load_string, args, , usage_string)
     switch (threading) {
     case ndjson::args::Threading::Single: return ndjson::load(json, mode);
     case ndjson::args::Threading::Multi: return ndjson::load_multi(json, mode);
-    default: std::abort();
+    default: [[unlikely]] std::abort();
     }
 }

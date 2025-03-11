@@ -56,6 +56,42 @@ namespace octave_ndjson
     }
 
     /**
+     * @brief Build a schema from simdjson dom element.
+     *
+     * @param schema The schema out parameter.
+     * @param elem The simdjson dom element.
+     *
+     * I specifically use out parameter here so I can reuse the Schema, thus reducing memory usage.
+     */
+    inline void build_schema(Schema& schema, simdjson::dom::element elem)
+    {
+        using T = simdjson::dom::element_type;
+        switch (elem.type()) {
+        case T::ARRAY: {
+            schema.push(Schema::Array::Begin);
+            for (auto v : simdjson::dom::array{ elem }) {
+                build_schema(schema, v);
+            }
+            schema.push(Schema::Array::End);
+        } break;
+        case T::OBJECT: {
+            schema.push(Schema::Object::Begin);
+            for (auto [k, v] : simdjson::dom::object{ elem }) {
+                schema.push(Schema::Key{ { k.data(), k.size() } });
+                build_schema(schema, v);
+            }
+            schema.push(Schema::Object::End);
+        } break;
+        case T::INT64: schema.push(Schema::Scalar::Number); break;
+        case T::UINT64: schema.push(Schema::Scalar::Number); break;
+        case T::DOUBLE: schema.push(Schema::Scalar::Number); break;
+        case T::STRING: schema.push(Schema::Scalar::String); break;
+        case T::BOOL: schema.push(Schema::Scalar::Bool); break;
+        case T::NULL_VALUE: schema.push(Schema::Scalar::Null); break;
+        }
+    }
+
+    /**
      * @brief Load and parse a JSON string into an Octave value (single-threaded).
      *
      * @param string The input string.
@@ -80,17 +116,10 @@ namespace octave_ndjson
         auto docs          = std::vector<octave_value>{};
         auto wanted_schema = std::optional<Schema>{};
 
-        const auto same_schema = [&mode](const Schema& reference, const Schema& schema) {
-            switch (mode) {
-            case ParseMode::Strict: return reference.is_same(schema, false);
-            case ParseMode::DynamicArray: return reference.is_same(schema, true);
-            case ParseMode::Relaxed: return true;
-            default: std::abort();
-            }
-        };
-
         for (auto it = stream.begin(); it != stream.end(); ++it) {
             auto doc = *it;
+
+            auto schema = Schema{ 0 };
 
             try {
                 auto value = simdjson::dom::element{};
@@ -101,16 +130,22 @@ namespace octave_ndjson
                 auto current_schema = Schema{ wanted_schema ? 0 : wanted_schema->size() };
                 auto parsed         = parse_octave_value(value);
 
-                docs.push_back(std::move(parsed));
+                if (mode == ParseMode::Relaxed) {
+                    docs.push_back(std::move(parsed));
+                    continue;
+                }
+
+                schema.reset();
+                build_schema(schema, value);
 
                 if (not wanted_schema.has_value()) {
                     wanted_schema = current_schema;
                 }
 
-                if (not same_schema(*wanted_schema, current_schema)) {
+                if (not wanted_schema->is_same(current_schema, mode == ParseMode::DynamicArray)) {
                     auto doc_number  = docs.size();
-                    auto wanted_str  = wanted_schema->stringify();
-                    auto current_str = current_schema.stringify();
+                    auto wanted_str  = wanted_schema->stringify(mode == ParseMode::DynamicArray);
+                    auto current_str = current_schema.stringify(mode == ParseMode::DynamicArray);
 
                     auto [wanted_diff, current_diff] = util::create_diff(wanted_str, current_str);
 
@@ -121,8 +156,11 @@ namespace octave_ndjson
                         current_diff,
                         doc_number
                     );
+
                     throw std::runtime_error{ message };
                 }
+
+                docs.push_back(std::move(parsed));
             } catch (std::exception& e) {
                 auto offset = it.current_index();
                 auto to_end = string.size() - static_cast<std::size_t>(offset);
@@ -174,27 +212,61 @@ namespace octave_ndjson
         simdjson::pad(string);
         auto string_unpadded = std::string_view{ string.data(), string_unpadded_size };
 
-        auto lines  = util::split(string_unpadded, '\n');
-        auto result = std::vector<octave_value>{};
+        auto lines = util::split(string_unpadded, '\n');
+        if (lines.size() == 0) {
+            return NDArray{};
+        } else if (lines.size() == 1) {
+            return load(string, mode);
+        }
 
         static constexpr auto no_exception = std::numeric_limits<std::size_t>::max();
 
-        auto output          = Cell{ dim_vector(static_cast<long>(lines.size()), 1) };
+        auto first_line = lines[0];
+        auto rem_lines  = std::span{ lines.begin() + 1, lines.size() - 1 };
+
+        auto concurrency = std::min((std::size_t)std::thread::hardware_concurrency(), rem_lines.size());
+        auto block_size  = rem_lines.size() / concurrency;
+        auto parsers     = std::vector<simdjson::dom::parser>(concurrency);
+        auto threads     = std::vector<std::jthread>{};
+
+        auto cell            = Cell{ dim_vector(static_cast<long>(lines.size()), 1) };
         auto exception       = std::exception_ptr{};
         auto exception_index = std::atomic<std::size_t>{ no_exception };
 
-        auto parse_function = [&](std::span<const std::string_view> block, long offset) {
-            auto parser = simdjson::dom::parser{};
+        auto reference_schema = Schema{ 0 };
+
+        auto parse_fn = [&](simdjson::dom::parser& parser, std::span<std::string_view> block, long offset) {
+            auto schema = Schema{ 0 };
+
             for (auto i = 0u; auto line : block) {
                 if (exception_index != std::numeric_limits<std::size_t>::max()) {
                     break;
                 }
 
                 try {
-                    auto doc           = parser.parse(line.data(), line.size(), false);
-                    output(offset + i) = parse_octave_value(doc.value());
+                    auto dom             = parser.parse(line.data(), line.size(), false).value();
+                    cell(offset + i + 1) = parse_octave_value(dom);    // 1st line is skipped
+
+                    if (mode != ParseMode::Relaxed) {
+                        schema.reset();
+                        build_schema(schema, dom);
+
+                        if (not reference_schema.is_same(schema, mode == ParseMode::DynamicArray)) {
+                            auto [reference_diff, current_diff] = util::create_diff(
+                                reference_schema.stringify(mode == ParseMode::DynamicArray),
+                                schema.stringify(mode == ParseMode::DynamicArray)
+                            );
+                            throw std::runtime_error{ std::format(
+                                "Mismatched schema, all documents must have the same schema"
+                                "\n\nFirst document:\n{0:}\nCurrent document (document number: {2:}):\n{1:}",
+                                reference_diff,
+                                current_diff,
+                                offset + i + 2    // line numbering is 1-indexed; 1st line is skipped
+                            ) };
+                        }
+                    }
                 } catch (...) {
-                    auto idx = static_cast<std::size_t>(offset) + i;
+                    auto idx = static_cast<std::size_t>(offset) + i + 1;    // 1st line is skipped
                     if (auto i = no_exception; exception_index.compare_exchange_strong(i, idx)) {
                         exception = std::current_exception();
                     }
@@ -204,21 +276,28 @@ namespace octave_ndjson
         };
 
         try {
-            auto concurrency = std::min((std::size_t)std::thread::hardware_concurrency(), lines.size());
-            auto block_size  = lines.size() / concurrency;
-            auto threads     = std::vector<std::jthread>{};
-
-            for (auto i : sv::iota(0u, concurrency)) {
-                auto offset       = i * block_size;
-                auto current_size = std::min(block_size, lines.size() - offset);
-                auto block        = std::span{ lines.begin() + static_cast<long>(offset), current_size };
-                threads.emplace_back(parse_function, block, offset);
+            // the first line is parsed separately here to get the reference schema
+            auto dom = parsers[0].parse(first_line.data(), first_line.size(), false);
+            if (dom.error()) {
+                exception_index = 0;
+                throw simdjson::simdjson_error{ dom.error() };
+            } else {
+                cell(0) = parse_octave_value(dom.value());
+                if (mode != ParseMode::Relaxed) {
+                    build_schema(reference_schema, dom.value());
+                };
             }
 
+            // the rest is parsed here
+            for (auto i : sv::iota(0u, concurrency)) {
+                auto offset       = i * block_size;    // first line is already parsed
+                auto current_size = std::min(block_size, rem_lines.size() - offset);
+                auto block        = std::span{ rem_lines.begin() + static_cast<long>(offset), current_size };
+                threads.emplace_back(parse_fn, std::ref(parsers[i]), block, offset);
+            }
             for (auto& thread : threads) {
                 thread.join();
             }
-
             if (exception_index != no_exception) {
                 std::rethrow_exception(exception);
             }
@@ -236,12 +315,30 @@ namespace octave_ndjson
                 e.what(),
                 substr,
                 line.size() > 50ul ? " ... " : "<eol>",
-                exception_index + 1
+                exception_index + 1    // line numbering is 1-indexed
             );
 
             error("%s", message.c_str());
         }
 
-        return output;
+        if (mode != ParseMode::Relaxed and reference_schema.root_is_object()) {
+            auto struct_array      = octave_map{};
+            auto struct_array_dims = dim_vector{ cell.numel(), 1 };
+            auto field_names       = cell(0).scalar_map_value().fieldnames();
+
+            if (field_names.numel() != 0) {
+                auto value = Cell{ struct_array_dims };
+                for (auto i : sv::iota(0l, field_names.numel())) {
+                    for (auto k : sv::iota(0l, cell.numel())) {
+                        value(k) = cell(k).scalar_map_value().getfield(field_names(i));
+                    }
+                    struct_array.assign(field_names(i), value);
+                }
+
+                return struct_array;
+            }
+        }
+
+        return cell;
     }
 }

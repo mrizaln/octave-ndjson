@@ -34,6 +34,15 @@ namespace octave_ndjson
 
         void        push(Part part) noexcept { m_parts.push_back(part); }
         std::size_t size() const noexcept { return m_parts.size(); }
+        void        reset() noexcept { m_parts.clear(); }
+
+        /**
+         * @brief Check if the root of the document is an object
+         */
+        bool root_is_object() const noexcept
+        {
+            return m_parts.empty() ? false : std::holds_alternative<Object>(m_parts.front());
+        }
 
         /**
          * @brief Check whether the schema is the same as the other schema.
@@ -74,11 +83,43 @@ namespace octave_ndjson
                     }
 
                     if (*i == Part{ Array::Begin }) {
-                        i = sr::find(i, m_parts.end(), Part{ Array::End });
+                        auto obj_count = 0;
+                        auto arr_count = 1;
+
+                        do {
+                            ++i;
+                            if (auto* arr = std::get_if<Array>(&*i)) {
+                                switch (*arr) {
+                                case Array::Begin: ++arr_count; break;
+                                case Array::End: --arr_count; break;
+                                }
+                            } else if (auto* obj = std::get_if<Object>(&*i)) {
+                                switch (*obj) {
+                                case Object::Begin: ++obj_count; break;
+                                case Object::End: --obj_count; break;
+                                }
+                            }
+                        } while ((obj_count > 0 or arr_count > 0) and i != m_parts.end());
                     }
 
                     if (*j == Part{ Array::Begin }) {
-                        j = sr::find(j, other.m_parts.end(), Part{ Array::End });
+                        auto obj_count = 0;
+                        auto arr_count = 1;
+
+                        do {
+                            ++j;
+                            if (auto* arr = std::get_if<Array>(&*j)) {
+                                switch (*arr) {
+                                case Array::Begin: ++arr_count; break;
+                                case Array::End: --arr_count; break;
+                                }
+                            } else if (auto* obj = std::get_if<Object>(&*j)) {
+                                switch (*obj) {
+                                case Object::Begin: ++obj_count; break;
+                                case Object::End: --obj_count; break;
+                                }
+                            }
+                        } while ((obj_count > 0 or arr_count > 0) and j != other.m_parts.end());
                     }
 
                     ++i;
@@ -100,7 +141,7 @@ namespace octave_ndjson
          *
          * Useful for debugging.
          */
-        std::string stringify() const noexcept
+        std::string stringify(bool dynamic_array) const noexcept
         {
             enum class Kind
             {
@@ -176,13 +217,44 @@ namespace octave_ndjson
                 },
             };
 
-            for (const auto& part : m_parts) {
+            auto it = m_parts.begin();
+            while (it != m_parts.end()) {
+                auto part = *it;
+                ++it;
+
+                if (dynamic_array and std::holds_alternative<Array>(part)) {
+                    auto obj_count = 0;
+                    auto arr_count = 1;
+
+                    while ((obj_count > 0 or arr_count > 0) and it != m_parts.end()) {
+                        if (auto* arr = std::get_if<Array>(&*it)) {
+                            switch (*arr) {
+                            case Array::Begin: ++arr_count; break;
+                            case Array::End: --arr_count; break;
+                            }
+                        } else if (auto* obj = std::get_if<Object>(&*it)) {
+                            switch (*obj) {
+                            case Object::Begin: ++obj_count; break;
+                            case Object::End: --obj_count; break;
+                            }
+                        }
+                        ++it;
+                    }
+
+                    buffer += "[ <any> x N ],\n";
+
+                    if (it == m_parts.end()) {
+                        break;
+                    }
+                    continue;
+                }
+
                 if (not traversal.empty() and traversal.back() == Kind::Array) {
                     if (prev_count == 0 and std::holds_alternative<Scalar>(part)) {
                         prev = part;
                         ++prev_count;
                         continue;
-                    } else if (prev == part) {
+                    } else if (prev == part and std::holds_alternative<Scalar>(part)) {
                         ++prev_count;
                         continue;
                     }
@@ -200,8 +272,8 @@ namespace octave_ndjson
                             }
                         },
                         [&](const auto&) {
-                            error("Repeated object can't be non-scalar."
-                                  "This is programmer's fault. Report this to the issue tracker.");
+                            error("[octave-ndjson] Repeated object can't be non-scalar."
+                                  " This is programmer's fault. Report this to the issue tracker.");
                             return std::string{ "<error>" };
                         },
                     };

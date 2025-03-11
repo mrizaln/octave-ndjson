@@ -10,7 +10,9 @@
 
 namespace octave_ndjson
 {
-    namespace detail
+    // code adapted from the octave `jsondecode.cc` source file:
+    // https://docs.octave.org/doxygen/dev/d7/d53/jsondecode_8cc_source.html
+    namespace detail_parse
     {
         namespace sv = std::views;
 
@@ -231,20 +233,30 @@ namespace octave_ndjson
         {
             using T = simdjson::dom::element_type;
             switch (dom.type()) {
-            case T::ARRAY: return detail::decode_array(dom.get_array());
-            case T::OBJECT: return detail::decode_object(dom.get_object());
+            case T::ARRAY: return detail_parse::decode_array(dom.get_array());
+            case T::OBJECT: return detail_parse::decode_object(dom.get_object());
             case T::INT64: return dom.get_int64().value();
             case T::UINT64: return dom.get_uint64().value();
             case T::DOUBLE: return dom.get_double().value();
             case T::STRING: return decode_string(dom.get_string().value());
             case T::BOOL: return dom.get_bool().value();
             case T::NULL_VALUE: return NDArray{};
+            default: [[unlikely]] std::abort();
             }
         }
     }
 
+    /**
+     * @brief Parse a simdjson dom into an octave_value.
+     *
+     * @param dom The simdjson dom element.
+     *
+     * @return A parsed octave_value.
+     *
+     * @throw simdjson::simdjson_error on parsing error.
+     */
     inline octave_value parse_octave_value(simdjson::dom::element dom)
     {
-        return detail::decode(dom);
+        return detail_parse::decode(dom);
     }
 }
