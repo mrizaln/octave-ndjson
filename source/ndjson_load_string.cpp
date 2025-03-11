@@ -74,7 +74,7 @@ example:
         octave> ndjson_load_string(data)
 
         error: Parsing error
-            > Mismatched schema, all documents must have same schema (dynamic_array: false)
+            > Mismatched schema, all documents must have same schema
 
         % rest of the message...
     ```

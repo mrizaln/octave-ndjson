@@ -113,22 +113,14 @@ namespace octave_ndjson
             error("failed to initilize simdjson: %s", simdjson::error_message(err));
         }
 
-        auto docs          = std::vector<octave_value>{};
-        auto wanted_schema = std::optional<Schema>{};
+        auto docs             = std::vector<octave_value>{};
+        auto reference_schema = std::optional<Schema>{};
+        auto schema           = Schema{ 0 };
 
         for (auto it = stream.begin(); it != stream.end(); ++it) {
-            auto doc = *it;
-
-            auto schema = Schema{ 0 };
-
+            auto dom = *it;
             try {
-                auto value = simdjson::dom::element{};
-                if (doc.get(value)) {
-                    throw std::runtime_error{ "The root of document must be either an Object or an Array" };
-                }
-
-                auto current_schema = Schema{ wanted_schema ? 0 : wanted_schema->size() };
-                auto parsed         = parse_octave_value(value);
+                auto parsed = parse_octave_value(dom.value());
 
                 if (mode == ParseMode::Relaxed) {
                     docs.push_back(std::move(parsed));
@@ -136,25 +128,23 @@ namespace octave_ndjson
                 }
 
                 schema.reset();
-                build_schema(schema, value);
+                build_schema(schema, dom.value());
 
-                if (not wanted_schema.has_value()) {
-                    wanted_schema = current_schema;
+                if (not reference_schema.has_value()) {
+                    reference_schema = schema;
                 }
 
-                if (not wanted_schema->is_same(current_schema, mode == ParseMode::DynamicArray)) {
-                    auto doc_number  = docs.size();
-                    auto wanted_str  = wanted_schema->stringify(mode == ParseMode::DynamicArray);
-                    auto current_str = current_schema.stringify(mode == ParseMode::DynamicArray);
-
-                    auto [wanted_diff, current_diff] = util::create_diff(wanted_str, current_str);
-
+                if (not reference_schema->is_same(schema, mode == ParseMode::DynamicArray)) {
+                    auto [reference_diff, current_diff] = util::create_diff(
+                        reference_schema->stringify(mode == ParseMode::DynamicArray),
+                        schema.stringify(mode == ParseMode::DynamicArray)
+                    );
                     auto message = std::format(
                         "Mismatched schema, all documents must have the same schema"
                         "\n\nFirst document:\n{0:}\nCurrent document (document number: {2:}):\n{1:}",
-                        wanted_diff,
+                        reference_diff,
                         current_diff,
-                        doc_number
+                        docs.size()
                     );
 
                     throw std::runtime_error{ message };
