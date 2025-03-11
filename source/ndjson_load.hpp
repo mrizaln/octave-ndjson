@@ -6,7 +6,8 @@
 // - i'm having a hard time dealing with naming collisions :((((((((((
 // - what the heck with the class hierarchy also??
 
-#include "multithreaded_parser.hpp"
+#include "parse_octave_value.hpp"
+#include "schema.hpp"
 
 #include <octave/oct-map.h>
 #include <octave/oct.h>
@@ -29,41 +30,6 @@ namespace octave_ndjson
         // Documents can have different schemas
         Relaxed,
     };
-
-    struct ParseException : std::runtime_error
-    {
-        ParseException(
-            const char*      message,
-            std::string_view string,
-            std::size_t      line_number,
-            std::size_t      offset
-        )
-            : std::runtime_error{ message }
-            , m_string{ string }
-            , m_line_number{ line_number }
-            , m_offset{ offset }
-        {
-        }
-
-        std::string_view m_string;
-        std::size_t      m_line_number;
-        std::size_t      m_offset;
-    };
-
-    /**
-     * @brief Helper function to create an exception from `ParseResult::Error`.
-     *
-     * @param result Error result.
-     * @param info Additional error information.
-     */
-    [[noreturn]] inline void make_exception(ParseResult::Error result, ParseResult::Info info)
-    {
-        try {
-            std::rethrow_exception(result.m_exception);
-        } catch (std::exception& e) {
-            throw ParseException{ e.what(), info.m_string, info.m_line_number, result.m_offset };
-        }
-    }
 
     /**
      * @brief Create a string with escaped whitespace.
@@ -158,14 +124,7 @@ namespace octave_ndjson
                     throw std::runtime_error{ message };
                 }
             } catch (std::exception& e) {
-                // const char* current = nullptr;
-                // if (doc.current_location().get(current)) {
-                //     current = string.data() + string.size();
-                // }
-                // auto offset  = current - string.data();
-                // offset      -= offset > 0;
-                auto offset = 0;
-
+                auto offset = it.current_index();
                 auto to_end = string.size() - static_cast<std::size_t>(offset);
                 auto substr = escape_whitespace({ string.data() + offset, std::min(to_end, 50ul) });
 
@@ -210,120 +169,79 @@ namespace octave_ndjson
      */
     inline octave_value load_multi(std::string& string, ParseMode mode)
     {
-        // NOTE: to make sure that the string has enough padding for simdjson use. see the explanation at
-        //       MultithreadedParser::thread_function
+        // NOTE: to make sure that the string has enough padding for simdjson use
         auto string_unpadded_size = string.size();
         simdjson::pad(string);
         auto string_unpadded = std::string_view{ string.data(), string_unpadded_size };
 
-        auto multithreaded_parser = MultithreadedParser{ std::thread::hardware_concurrency() };
-        auto line_splitter        = util::StringSplitter{ string_unpadded, '\n' };
+        auto lines  = util::split(string_unpadded, '\n');
+        auto result = std::vector<octave_value>{};
 
-        auto docs          = std::vector<octave_value>{};
-        auto wanted_schema = std::optional<Schema>{};
+        static constexpr auto no_exception = std::numeric_limits<std::size_t>::max();
 
-        auto assert_same_schema = [&](const Schema& other, ParseResult::Info info) {
-            const auto same_schema = [&mode](const Schema& reference, const Schema& schema) {
-                switch (mode) {
-                case ParseMode::Strict: return reference.is_same(schema, false);
-                case ParseMode::DynamicArray: return reference.is_same(schema, true);
-                case ParseMode::Relaxed: return true;
-                default: std::abort();
+        auto output          = Cell{ dim_vector(static_cast<long>(lines.size()), 1) };
+        auto exception       = std::exception_ptr{};
+        auto exception_index = std::atomic<std::size_t>{ no_exception };
+
+        auto parse_function = [&](std::span<const std::string_view> block, long offset) {
+            auto parser = simdjson::dom::parser{};
+            for (auto i = 0u; auto line : block) {
+                if (exception_index != std::numeric_limits<std::size_t>::max()) {
+                    break;
                 }
-            };
 
-            if (not same_schema(*wanted_schema, other)) {
-                auto wanted_str  = wanted_schema->stringify();
-                auto current_str = other.stringify();
-
-                auto [wanted_diff, current_diff] = util::create_diff(wanted_str, current_str);
-
-                auto message = std::format(
-                    "Mismatched schema, all documents must have same schema (dynamic_array: {3:})"
-                    "\n\nFirst document:\n{0:}\nCurrent document (line: {2:}):\n{1:}",
-                    wanted_diff,
-                    current_diff,
-                    info.m_line_number,
-                    mode == ParseMode::DynamicArray
-                );
-
-                throw ParseException{ message.c_str(), info.m_string, info.m_line_number, 0 };
+                try {
+                    auto doc           = parser.parse(line.data(), line.size(), false);
+                    output(offset + i) = parse_octave_value(doc.value());
+                } catch (...) {
+                    auto idx = static_cast<std::size_t>(offset) + i;
+                    if (auto i = no_exception; exception_index.compare_exchange_strong(i, idx)) {
+                        exception = std::current_exception();
+                    }
+                }
+                ++i;
             }
         };
 
         try {
-            auto line_number = 0ul;
-            while (auto line = line_splitter.next()) {
-                ++line_number;
+            auto concurrency = std::min((std::size_t)std::thread::hardware_concurrency(), lines.size());
+            auto block_size  = lines.size() / concurrency;
+            auto threads     = std::vector<std::jthread>{};
 
-                auto parsed = multithreaded_parser.parse(*line, line_number);
-
-                // at the start of the parsing the parser does not have any previous result, but if the
-                // concurrency limit is reached then the parser will return the previous result
-                if (parsed.is_empty()) {
-                    continue;
-                }
-
-                if (parsed.is_error()) {
-                    auto error = std::get<ParseResult::Error>(parsed.m_result);
-                    make_exception(error, parsed.m_info);
-                }
-
-                auto& result               = std::get<ParseResult::Parsed>(parsed.m_result);
-                auto&& [oct_value, schema] = std::move(result);
-
-                if (not wanted_schema.has_value()) {
-                    wanted_schema = schema;
-                }
-
-                assert_same_schema(schema, parsed.m_info);
-                docs.push_back(std::move(oct_value));
+            for (auto i : sv::iota(0u, concurrency)) {
+                auto offset       = i * block_size;
+                auto current_size = std::min(block_size, lines.size() - offset);
+                auto block        = std::span{ lines.begin() + static_cast<long>(offset), current_size };
+                threads.emplace_back(parse_function, block, offset);
             }
 
-            // line parsing ends but the parser might still parsing
-            for (auto&& parsed : multithreaded_parser.drain()) {
-                if (parsed.is_error()) {
-                    auto error = std::get<ParseResult::Error>(parsed.m_result);
-                    make_exception(error, parsed.m_info);
-                }
-
-                auto& result               = std::get<ParseResult::Parsed>(parsed.m_result);
-                auto&& [oct_value, schema] = std::move(result);
-
-                if (not wanted_schema.has_value()) {
-                    wanted_schema = schema;
-                }
-
-                assert_same_schema(schema, parsed.m_info);
-                docs.push_back(std::move(oct_value));
+            for (auto& thread : threads) {
+                thread.join();
             }
-        } catch (ParseException& e) {
-            auto to_end = e.m_string.size() - e.m_offset;
-            auto substr = escape_whitespace({ e.m_string.data() + e.m_offset, std::min(to_end, 50ul) });
+
+            if (exception_index != no_exception) {
+                std::rethrow_exception(exception);
+            }
+        } catch (std::exception& e) {
+            auto line   = lines[exception_index];
+            auto substr = escape_whitespace(line.substr(0, std::min(line.size(), 50ul)));
 
             auto message = std::format(
                 "Parsing error\n"
                 "\t> {}\n\n"
-                "\t> around: [{}\033[1;33m{}\033[00m{}] (line: {} | offset: {})\n"
+                "\t> around: [<bol>\033[1;33m{}\033[00m{}] (line: {})\n"
                 "\t                ^\n"
                 "\t                |\n"
                 "\t  parsing ends here",
                 e.what(),
-                e.m_offset > 0 ? " ... " : "<bol>",
                 substr,
-                to_end > 50ul ? " ... " : "<eol>",
-                e.m_line_number,
-                e.m_offset
+                line.size() > 50ul ? " ... " : "<eol>",
+                exception_index + 1
             );
 
             error("%s", message.c_str());
         }
 
-        auto cell = Array<octave_value>{ dim_vector{ 1, static_cast<long>(docs.size()) } };
-        for (auto i = 0ul; i < docs.size(); ++i) {
-            cell(0, static_cast<long>(i)) = docs[i];
-        }
-
-        return octave_value{ cell };
+        return output;
     }
 }
