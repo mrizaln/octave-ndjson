@@ -104,10 +104,10 @@ namespace octave_ndjson
      */
     inline octave_value load(const std::string& string, ParseMode mode)
     {
-        auto parser = simdjson::ondemand::parser{};
-        auto stream = simdjson::ondemand::document_stream{};
+        auto parser = simdjson::dom::parser{};
+        auto stream = simdjson::dom::document_stream{};
 
-        if (auto err = parser.iterate_many(string).get(stream); err) {
+        if (auto err = parser.parse_many(string).get(stream); err) {
             error("failed to initilize simdjson: %s", simdjson::error_message(err));
         }
 
@@ -124,20 +124,16 @@ namespace octave_ndjson
         };
 
         for (auto it = stream.begin(); it != stream.end(); ++it) {
-            if (auto err = it.error(); err) {
-                error("Got a broken document at %zu: %s", it.current_index(), simdjson::error_message(err));
-            }
-
             auto doc = *it;
 
             try {
-                auto value = simdjson::ondemand::value{};
-                if (doc.get_value().get(value)) {
+                auto value = simdjson::dom::element{};
+                if (doc.get(value)) {
                     throw std::runtime_error{ "The root of document must be either an Object or an Array" };
                 }
 
                 auto current_schema = Schema{ wanted_schema ? 0 : wanted_schema->size() };
-                auto parsed         = parse_json_value(value, current_schema);
+                auto parsed         = parse_octave_value(value);
 
                 docs.push_back(std::move(parsed));
 
@@ -162,12 +158,13 @@ namespace octave_ndjson
                     throw std::runtime_error{ message };
                 }
             } catch (std::exception& e) {
-                const char* current = nullptr;
-                if (doc.current_location().get(current)) {
-                    current = string.data() + string.size();
-                }
-                auto offset  = current - string.data();
-                offset      -= offset > 0;
+                // const char* current = nullptr;
+                // if (doc.current_location().get(current)) {
+                //     current = string.data() + string.size();
+                // }
+                // auto offset  = current - string.data();
+                // offset      -= offset > 0;
+                auto offset = 0;
 
                 auto to_end = string.size() - static_cast<std::size_t>(offset);
                 auto substr = escape_whitespace({ string.data() + offset, std::min(to_end, 50ul) });
