@@ -97,6 +97,9 @@ namespace octave_ndjson
         auto schema           = Schema{ 0 };
 
         for (auto it = stream.begin(); it != stream.end(); ++it) {
+            // detect interrupt
+            OCTAVE_QUIT;
+
             auto dom = *it;
             try {
                 auto parsed = parse_octave_value(dom.value());
@@ -223,8 +226,11 @@ namespace octave_ndjson
         auto parse_fn = [&](simdjson::dom::parser& parser, std::span<std::string_view> block, long offset) {
             auto schema = Schema{ 0 };
 
-            for (auto i = 0u; auto line : block) {
-                if (exception_index != std::numeric_limits<std::size_t>::max()) {
+            for (auto [i, line] : block | sv::enumerate) {
+                // detect interrupt
+                OCTAVE_QUIT;
+
+                if (exception_index != no_exception) {
                     break;
                 }
 
@@ -232,31 +238,32 @@ namespace octave_ndjson
                     auto dom             = parser.parse(line.data(), line.size(), false).value();
                     cell(offset + i + 1) = parse_octave_value(dom);    // 1st line is skipped
 
-                    if (mode != ParseMode::Relaxed) {
-                        schema.reset();
-                        detail::build_schema(schema, dom);
+                    if (mode == ParseMode::Relaxed) {
+                        continue;
+                    }
 
-                        if (not reference_schema.is_same(schema, mode == ParseMode::DynamicArray)) {
-                            auto [reference_diff, current_diff] = util::create_diff(
-                                reference_schema.stringify(mode == ParseMode::DynamicArray),
-                                schema.stringify(mode == ParseMode::DynamicArray)
-                            );
-                            throw std::runtime_error{ std::format(
-                                "Mismatched schema, all documents must have the same schema"
-                                "\n\nFirst document:\n{0:}\nCurrent document (document number: {2:}):\n{1:}",
-                                reference_diff,
-                                current_diff,
-                                offset + i + 2    // line numbering is 1-indexed; 1st line is skipped
-                            ) };
-                        }
+                    schema.reset();
+                    detail::build_schema(schema, dom);
+
+                    if (not reference_schema.is_same(schema, mode == ParseMode::DynamicArray)) {
+                        auto [reference_diff, current_diff] = util::create_diff(
+                            reference_schema.stringify(mode == ParseMode::DynamicArray),
+                            schema.stringify(mode == ParseMode::DynamicArray)
+                        );
+                        throw std::runtime_error{ std::format(
+                            "Mismatched schema, all documents must have the same schema"
+                            "\n\nFirst document:\n{0:}\nCurrent document (document number: {2:}):\n{1:}",
+                            reference_diff,
+                            current_diff,
+                            offset + i + 2    // line numbering is 1-indexed; 1st line is skipped
+                        ) };
                     }
                 } catch (...) {
-                    auto idx = static_cast<std::size_t>(offset) + i + 1;    // 1st line is skipped
+                    auto idx = static_cast<std::size_t>(offset + i) + 1;    // 1st line is skipped
                     if (auto i = no_exception; exception_index.compare_exchange_strong(i, idx)) {
                         exception = std::current_exception();
                     }
                 }
-                ++i;
             }
         };
 
